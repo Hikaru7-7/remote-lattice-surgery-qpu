@@ -468,8 +468,8 @@ BEATS = {                                              # sub-beats each operatio
     "comm_out": ["shuttle-through-SPAM"], "comm_lift": ["lift"], "comm_gate": ["merge+gate"],
     "comm_lower": ["lift"], "comm_back": ["shuttle-through-SPAM"], "comm_arrive": ["settle"],
     "measure": ["read"], "readout": ["merge", "rotate", "split"], "syndromes": ["read"],
-    "reset": ["merge", "rotate", "split"], "reset_done": ["settle"],
-    "reherald": ["herald"], "unpark": ["lift-to-junction", "settle-home"], "round": [],
+    "reset": ["merge", "rotate", "split"], "reset_done": ["settle"], "herald": ["herald"],
+    "unpark": ["lift-to-junction", "settle-home"], "round": [],
 }
 
 
@@ -537,6 +537,8 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
     for rnd in range(rounds):
         if rounds > 1:
             ops.append(("round", rnd, rounds))
+        if merge:
+            ops.append(("herald", lanes))          # each round needs a fresh Bell pair per lane
         for step in range(4):
             inrow, cross = gates_at(d, step, merge)
             if inrow:
@@ -568,8 +570,6 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
         if rnd < rounds - 1:
             ops += [("reset", layer) for layer in reversed(layers)]
             ops.append(("reset_done", rnd))
-            if merge:
-                ops.append(("reherald", lanes))
     if parked:
         ops.append(("unpark", parked))
     return ops
@@ -592,6 +592,43 @@ def check_round_ops(d: int) -> None:
     m = round_ops(d, merge=True, rounds=1)
     cg = sum(len(op[2]) for op in m if op[0] == "comm_gate")
     assert cg == 2 * (d - 1), f"d={d}: {cg} comm gates, want {2*(d-1)}"
+
+
+# --- OPERATION TALLY  (the hook for Chapter 5 timing) -----------------------
+# Group each physical beat into a kind Chapter 5 gives a duration to: a two-qubit
+# gate, a crystal rotation (the extra beat a swap costs), a merge/split into or out
+# of a well, a linear shuttle hop, a junction transit, a measurement, a Bell-pair
+# herald. Round time is then the durations summed along the schedule.
+#
+# NOTE for Chapter 5: one "junction" beat here is a full X-junction transit, and an
+# ion crosses the junction intersection TWICE in it, once to turn off its row into
+# the cross-cell transport lane and once to turn into the target cell. So a junction
+# beat should be weighted as two intersection crossings, not one, when per-operation
+# times are plugged in. The tally counts the beat once; Chapter 5 doubles its time.
+BEAT_KIND = {
+    "merge+gate": "gate", "rotate": "swap_rotation", "merge": "merge_split", "split": "merge_split",
+    "shuttle-through-SPAM": "shuttle", "drop": "shuttle", "settle-in-spare": "shuttle",
+    "settle-home": "shuttle", "settle": "shuttle", "lift": "junction", "lift-to-junction": "junction",
+    "read": "measure", "herald": "herald",
+}
+
+
+def op_tally(d: int, merge: bool = False, rounds: int = 1) -> dict:
+    """How many of each operation and each physical beat a round (or merge) runs, so
+    Chapter 5 can weight each beat kind by a duration and read off the round time.
+    Counts are per operation, not per ion, because ions of the same kind move together
+    in one beat. total_beats is the serial upper bound: within a step some kinds run
+    in parallel, which Chapter 5 folds in. two_qubit_gates counts every gate coupling."""
+    from collections import Counter
+    ops = round_ops(d, merge, rounds)
+    op_count = Counter(op[0] for op in ops)
+    beat_count = Counter(b for op in ops for b in BEATS[op[0]])
+    kind = Counter()
+    for b, n in beat_count.items():
+        kind[BEAT_KIND.get(b, b)] += n
+    gates = sum(len(op[2]) for op in ops if op[0] in ("inrow", "xgate", "comm_gate"))
+    return {"operations": dict(op_count), "beats": dict(beat_count), "by_kind": dict(kind),
+            "total_beats": sum(beat_count.values()), "two_qubit_gates": gates}
 
 
 
@@ -871,6 +908,11 @@ if __name__ == "__main__":
         print("  round operations .... PASS  (swap=merge/rotate/split, comm delivery through SPAM; gates cover every coupling)")
         no = len(round_ops(3, merge=False)); nm = len(round_ops(3, merge=True, rounds=2))
         print(f"    d=3: {no} ops in a local round, {nm} ops in a 2-round merge")
+        print("operation tally (Chapter 5 weights each beat kind by a duration):")
+        for lbl, mg, rr in [("local round     ", False, 1), ("one merge round  ", True, 1), ("full d=3 merge   ", True, 3)]:
+            t = op_tally(3, mg, rr)
+            print(f"  {lbl}: {t['total_beats']:3d} serial beats, {t['two_qubit_gates']:2d} two-qubit gates")
+            print(f"      by kind: {t['by_kind']}")
         print(f"  comm-ion count ...... note: {comm_ions_per_lane()} per lane, cycling herald/deliver/measure/re-herald (a herald pool is a Ch5 option)")
         for d in (3, 5, 7):
             print(f"    d={d}: cells stay {per_cell_ancillas(d)} (max {d}); a new seam ancilla per check would force max {netnew_busiest(d)}; blocked lanes {blocked_lanes(d)} clear to spare/routing")

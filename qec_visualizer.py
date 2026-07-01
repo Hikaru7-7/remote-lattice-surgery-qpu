@@ -18,7 +18,7 @@ Run:  python3 qec_visualizer.py
 """
 from __future__ import annotations
 import json
-from qec_scheduler import build_stabilizers, place, corner_step, stab_cell, num, seam_schedule, round_ops
+from qec_scheduler import build_stabilizers, place, stab_cell, num, seam_schedule, round_ops
 
 D = 3
 MERGE_ROUNDS = 2
@@ -129,7 +129,7 @@ def build(merge=False, rounds=1):
         v = op[0]
         if v == "prep":
             snap(f"Start of the {'merge' if op[1] else 'round'}: data and ancillas in memory wells, ancillas in their basis."
-                 + (" Comm ions hold heralded Bell pairs at the cavities." if op[1] else ""))
+                 + (" Comm ions wait at the cavities." if op[1] else ""))
         elif v == "round":
             snap(f"Round {op[1] + 1} of {op[2]}.", badge=f"round {op[1] + 1}")
         elif v == "park":
@@ -238,8 +238,8 @@ def build(merge=False, rounds=1):
         elif v == "reset_done":
             snap(f"Ancillas are reset and back in their memory wells for round {op[1] + 2}.",
                  hi=[LABEL[s] for s in STABS if not (merge and is_right_boundary(s))])
-        elif v == "reherald":
-            snap("The comm ions re-herald a fresh Bell pair at their cavities.", hi=[C(l) for l in op[1]])
+        elif v == "herald":
+            snap("The comm ions herald a fresh Bell pair at their cavities.", hi=[C(l) for l in op[1]])
     return FR, ions, home
 
 
