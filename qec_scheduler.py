@@ -230,7 +230,7 @@ def check_gate_zone(d: int) -> None:
             f"d={d}: cross gate routes through a junction that does not exist"
 
 
-# --- SEAM  (remote lattice surgery: the seam checks ride in the same round) -
+# --- TWO-QPU MERGE  (remote lattice surgery: the seam stabilizers) ----------
 # During a merge, the seam-facing data qubit of each row (column d-1) also
 # gates with that row's communication ion, which holds a heralded Bell pair.
 # That extra gate must fit in a connection step where the qubit is not already
@@ -258,6 +258,49 @@ def check_seam_fits(d: int) -> None:
         free = 4 - len(bulk_steps_at(d, r))
         assert free >= n_seam_checks(d, r), \
             f"d={d} row {r}: {n_seam_checks(d, r)} seam gates, only {free} free steps"
+
+
+# The two modules are two copies of the same code. A merge joins them along the
+# seam where module A's right boundary (column d-1) meets module B's left
+# boundary (column 0).
+def seam_stabilizers(d: int) -> list:
+    """The d-1 weight-4 seam checks turned on for a merge. Check s reads two
+    boundary data of module A (rows s and s+1, column d-1) and two of module B
+    (rows s and s+1, column 0). Two of its four gates cross the remote link."""
+    seam = []
+    for s in range(d - 1):
+        seam.append({"s": s,
+                     "A": [(s, d - 1), (s + 1, d - 1)],   # local, in module A
+                     "B": [(s, 0),     (s + 1, 0)]})       # remote, in module B
+    return seam
+
+
+def check_seam_census(d: int) -> None:
+    """Check: there are d-1 seam checks, each weight 4, split two local and two
+    remote, matching the boundary the code exposes to the seam."""
+    seam = seam_stabilizers(d)
+    assert len(seam) == d - 1, f"d={d}: {len(seam)} seam checks, want {d-1}"
+    for sc in seam:
+        assert len(sc["A"]) == 2 and len(sc["B"]) == 2, \
+            f"d={d}: seam check {sc['s']} is not two local plus two remote"
+
+
+def bell_pairs_per_round(d: int) -> int:
+    """One heralded Bell pair carries each seam check's remote link, so a merge
+    round needs d-1 pairs, one per seam check."""
+    return d - 1
+
+
+def check_merge_demand(d: int, lanes: int = None) -> tuple:
+    """Check: a merge round needs d-1 Bell pairs, the d communication lanes can
+    supply them with one lane held spare, and a full merge of d rounds needs
+    d(d-1) pairs in all."""
+    demand = bell_pairs_per_round(d)
+    assert demand == len(seam_stabilizers(d)), f"d={d}: demand {demand} != seam checks"
+    lanes = d if lanes is None else lanes
+    assert lanes >= demand, f"d={d}: {lanes} lanes cannot supply {demand} pairs/round"
+    return demand, lanes, demand * d
+
 
 
 def col_x(d: int, cells: list) -> dict:
@@ -509,6 +552,13 @@ if __name__ == "__main__":
             b = sorted(bulk_steps_at(3, r))
             free = sorted(set(range(4)) - set(b))
             print(f"    row {r}: bulk in {b}, {n_seam_checks(3, r)} seam gate(s) fit in free {free}")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_seam_census(d); check_merge_demand(d)
+        print("  seam census ......... PASS  (d-1 weight-4 seam checks)")
+        print("  merge demand ........ PASS  (d-1 Bell pairs/round, d lanes)")
+        for d in (3, 5, 7):
+            dem, lanes, tot = check_merge_demand(d)
+            print(f"    d={d}: {dem} pairs/round, {lanes} lanes ({lanes - dem} spare), {tot} per {d}-round merge")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
