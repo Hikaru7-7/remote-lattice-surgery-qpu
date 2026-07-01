@@ -202,6 +202,74 @@ def readout_layers(cells: list) -> int:
     return layers
 
 
+def col_x(d: int, cells: list) -> dict:
+    """Column coordinate of every ion, aligned across cells so a junction at
+    column c lines up in every cell. Data (r,c) -> c; a gap ancilla -> halfway
+    between its two data; a left/right-end ancilla -> just outside the row."""
+    pos = {}
+    for i, cell in enumerate(cells):
+        for j, (kind, item) in enumerate(cell):
+            if kind == "data":
+                pos[item] = [i, item[1]]                       # column c
+            else:
+                lft = cell[j - 1] if j > 0 else None
+                rgt = cell[j + 1] if j < len(cell) - 1 else None
+                if lft and lft[0] == "data" and rgt and rgt[0] == "data":
+                    pos[item] = [i, (lft[1][1] + rgt[1][1]) / 2]
+                elif lft is None:
+                    pos[item] = [i, -0.5]
+                else:
+                    pos[item] = [i, d - 0.5]
+    return pos
+
+
+def _overlap(pos: dict, merged: set):
+    """Any two non-merged ions in the same cell closer than a qubit spacing?"""
+    by_cell = {}
+    for ion, (cell, x) in pos.items():
+        by_cell.setdefault(cell, []).append((x, ion))
+    for cell, arr in by_cell.items():
+        arr.sort(key=lambda t: t[0])
+        for k in range(1, len(arr)):
+            (x0, i0), (x1, i1) = arr[k - 1], arr[k]
+            if abs(x1 - x0) < 0.3 and frozenset((i0, i1)) not in merged:
+                return f"cell {cell}: two ions at ~{x1}"
+    return None
+
+
+def crossings_parallel_ok(d: int, step: int):
+    """Try to position ALL cross-row ancillas of one step at once: each swaps
+    with the in-row data at its target column, then transits (straight down its
+    column's junction) into the neighbour cell to merge. Return None if it is
+    collision-free, else where it collides."""
+    cells = place(d)
+    pos = col_x(d, cells)
+    cellof = {item: i for i, c in enumerate(cells) for k, item in c if k == "anc"}
+    moving = [(s, cellof[s], r, c)
+              for s in build_stabilizers(d)
+              for (r, c) in s.data
+              if r != cellof[s] and corner_step(s, (r, c)) == step]
+    for a, home, tgt, c in moving:                    # swap-out (all together)
+        a_old = pos[a][1]
+        pos[a] = [home, c]
+        pos[(home, c)] = [home, a_old]
+    bad = _overlap(pos, set())
+    if bad:
+        return "swap-out " + bad
+    merged = set()
+    for a, home, tgt, c in moving:                    # transit down the column
+        pos[a] = [tgt, c]
+        merged.add(frozenset((a, (tgt, c))))
+    return None if not (bad := _overlap(pos, merged)) else "transit " + bad
+
+
+def check_parallel_crossings(d: int) -> None:
+    """Check: in every step, all cross-row crossings can fire in parallel."""
+    for step in range(4):
+        bad = crossings_parallel_ok(d, step)
+        assert bad is None, f"d={d} step {step}: {bad}"
+
+
 def connection_phases(d: int, cells: list, verbose: bool = False) -> int:
     """Count the serial two-qubit-gate phases in the 4 connection steps.
     In-row gates fire together (1 phase). Cross-row gates that share a cell
@@ -364,7 +432,13 @@ if __name__ == "__main__":
         print(f"    total = {p2} phases")
         for d in (5, 7, 9):
             print(f"  d={d} balanced: {connection_phases(d, place(d))} phases")
-        print("\nLayer 4: gate-phase count in place. Next: the full move-level no-pass check.")
+        print("do the cross-row crossings actually fire in parallel?")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_parallel_crossings(d)
+        print("  parallel crossings .. PASS  (d = 3,5,7,9,11,15)")
+        print("  => each step is 1 gate phase, so the round is 4 connection")
+        print("     phases + readout, FLAT in d. The linear count above was the")
+        print("     conservative bound; the crossings really do parallelize.")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
