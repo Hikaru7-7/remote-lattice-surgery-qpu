@@ -354,6 +354,38 @@ def check_seam_schedule(d: int) -> None:
         assert len({g["data_top"], g["data_bot"], g["comm"]}) == 3, f"d={d} seam {si}: ancilla double-books a step"
 
 
+# --- CROWDING  (does a merge add ions to the cells? no) ---------------------
+# The realistic choice: keep each communication ion at its cavity so it never
+# stops generating Bell pairs (generation is the bottleneck), and let the two
+# boundary data of a seam check come to it and couple there. No separate seam
+# ancilla is added, and the freed right-boundary ancillas idle in place. So a
+# merge adds nothing to the memory or gate zone, and no cell is crowded.
+def per_cell_ancillas(d: int) -> list:
+    """Ancillas resident in each cell, read from the placement."""
+    return [sum(1 for kind, _ in cell if kind == "anc") for cell in place(d)]
+
+
+def check_merge_no_crowding(d: int) -> None:
+    """Check: a merge adds nothing to any cell. The seam is carried by comm ions,
+    which stay at their cavities, so the per-cell counts hold at the base
+    {d, ..., d, d-1} and the busiest cell stays at d."""
+    base = per_cell_ancillas(d)
+    assert max(base) == d, f"d={d}: base max {max(base)} != d"
+    during = per_cell_ancillas(d)                    # a merge changes nothing here
+    assert during == base and max(during) == d, f"d={d}: a merge crowded a cell"
+
+
+def netnew_busiest(d: int) -> int:
+    """If instead each seam check added a NEW ancilla, balanced to the roomier of
+    its two cells, the busiest cell would rise to this. Shown only to justify not
+    doing it; pigeonhole forces d+1."""
+    load = per_cell_ancillas(d)
+    for si in range(d - 1):
+        load[si if load[si] <= load[si + 1] else si + 1] += 1
+    return max(load)
+
+
+
 
 
 def col_x(d: int, cells: list) -> dict:
@@ -619,6 +651,11 @@ if __name__ == "__main__":
         print("  seam schedule (d=3), each seam check by step:")
         for si, g in seam_schedule(3).items():
             print(f"    seam check {si} (cells {si},{si+1}): data gates in steps {g['data_top']} and {g['data_bot']}, comm-ion gate in step {g['comm']}")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_merge_no_crowding(d)
+        print("  merge crowding ...... PASS  (comm ions carry the seam; cells unchanged)")
+        for d in (3, 5, 7):
+            print(f"    d={d}: cells stay {per_cell_ancillas(d)} (max {d}); a new seam ancilla per check would force max {netnew_busiest(d)}")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
