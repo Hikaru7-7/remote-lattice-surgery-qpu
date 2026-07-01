@@ -451,6 +451,28 @@ def check_lane_clearing(d: int) -> None:
         blocker = [s for s in rb if cell[s] == l]
         assert len(blocker) == 1, f"d={d} lane {l}: want exactly one right-boundary blocker"
     assert len(blocked_lanes(d)) == (d - 1) // 2, f"d={d}: blocked-lane count off"
+    plan = park_plan(d)
+    assert len(plan) == len(blocked_lanes(d)), f"d={d}: park plan size != blocked lanes"
+    assert len({w for _, _, w in plan}) == len(plan), f"d={d}: park wells not distinct"
+
+
+def park_plan(d: int) -> list:
+    """Where each idle right-boundary ancilla goes during a merge, and in what order.
+    It routes through the boundary junction at column d-1 (the rightmost X-junction the
+    comm ions already use, so no new junction is added) down to a park well appended to
+    the bottom cell's row. The bottom cell therefore grows by floor((d-1)/2) park wells
+    with distance. Bottom-most ancilla first, to the furthest well, so no ion is ever
+    passed. Returns [(stab, home_cell, well_index), ...] in routing order; well 0 is the
+    nearest appended well, higher indices are further right along the bottom cell."""
+    cell = stab_cell(d)
+    idle = sorted(right_boundary_stabs(d), key=lambda s: -cell[s])   # bottom-most cell first
+    n = len(idle)
+    return [(s, cell[s], n - 1 - k) for k, s in enumerate(idle)]     # first routed -> furthest well
+
+
+def bottom_park_wells(d: int) -> int:
+    """How many park wells the bottom cell's row gains for a merge; grows with d."""
+    return len(right_boundary_stabs(d))
 
 
 # --- THE ROUND AS PHYSICAL OPERATIONS  (the schedule, motion and all) -------
@@ -462,14 +484,14 @@ def check_lane_clearing(d: int) -> None:
 # gating, and shuttling back. round_ops emits this list; the visualizer only
 # assigns coordinates to it, so the animation and the schedule are the same object.
 BEATS = {                                              # sub-beats each operation takes
-    "prep": ["settle"], "park": ["lift-to-junction", "settle-in-spare"],
+    "prep": ["settle"], "park": ["shuttle-to-junction", "junction-descent", "shuttle-to-park"],
     "inrow": ["merge+gate", "split"], "swap": ["merge", "rotate", "split"],
     "xlift": ["lift"], "xgate": ["merge+gate"], "xlower": ["lift"], "xdrop": ["drop"],
     "comm_out": ["shuttle-through-SPAM"], "comm_lift": ["lift"], "comm_gate": ["merge+gate"],
     "comm_lower": ["lift"], "comm_back": ["shuttle-through-SPAM"], "comm_arrive": ["settle"],
     "measure": ["read"], "readout": ["merge", "rotate", "split"], "syndromes": ["read"],
     "reset": ["merge", "rotate", "split"], "reset_done": ["settle"], "herald": ["herald"],
-    "unpark": ["lift-to-junction", "settle-home"], "round": [],
+    "unpark": ["shuttle-from-park", "junction-ascent", "shuttle-home"], "round": [],
 }
 
 
@@ -527,13 +549,13 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
     Each op is (verb, ...); BEATS[verb] gives its sub-beats. This is the schedule the
     visualizer animates; it owns the sequence, the visualizer only the coordinates."""
     cell = stab_cell(d)
-    parked = [(s, cell[s]) for s in right_boundary_stabs(d)] if merge else []
-    exclude = {s for s, _ in parked}
+    plan = park_plan(d) if merge else []                 # idle right-boundary ancillas -> bottom-cell park wells
+    exclude = {s for s, cl, well in plan}
     sched = seam_schedule(d) if merge else {}
     lanes = sorted(sched.keys())
     ops = [("prep", merge)]
-    if parked:
-        ops.append(("park", parked))
+    for s, cl, well in plan:                             # park them first, in routing order
+        ops.append(("park", s, cl, well))
     for rnd in range(rounds):
         if rounds > 1:
             ops.append(("round", rnd, rounds))
@@ -570,8 +592,8 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
         if rnd < rounds - 1:
             ops += [("reset", layer) for layer in reversed(layers)]
             ops.append(("reset_done", rnd))
-    if parked:
-        ops.append(("unpark", parked))
+    for s, cl, well in reversed(plan):                   # unpark in reverse order
+        ops.append(("unpark", s, cl, well))
     return ops
 
 
@@ -607,9 +629,10 @@ def check_round_ops(d: int) -> None:
 # times are plugged in. The tally counts the beat once; Chapter 5 doubles its time.
 BEAT_KIND = {
     "merge+gate": "gate", "rotate": "swap_rotation", "merge": "merge_split", "split": "merge_split",
-    "shuttle-through-SPAM": "shuttle", "drop": "shuttle", "settle-in-spare": "shuttle",
-    "settle-home": "shuttle", "settle": "shuttle", "lift": "junction", "lift-to-junction": "junction",
-    "read": "measure", "herald": "herald",
+    "shuttle-through-SPAM": "shuttle", "drop": "shuttle", "settle": "shuttle",
+    "shuttle-to-junction": "shuttle", "shuttle-to-park": "shuttle", "shuttle-from-park": "shuttle",
+    "shuttle-home": "shuttle", "junction-descent": "junction", "junction-ascent": "junction",
+    "lift": "junction", "read": "measure", "herald": "herald",
 }
 
 
@@ -629,6 +652,59 @@ def op_tally(d: int, merge: bool = False, rounds: int = 1) -> dict:
     gates = sum(len(op[2]) for op in ops if op[0] in ("inrow", "xgate", "comm_gate"))
     return {"operations": dict(op_count), "beats": dict(beat_count), "by_kind": dict(kind),
             "total_beats": sum(beat_count.values()), "two_qubit_gates": gates}
+
+
+# --- PARALLELISM  (the serial list is an upper bound; this is the real depth) ---
+# round_ops lists operations one at a time so it is provably collision-free. But two
+# operations that move no ion in common can fire in the same time-step. Packing them is
+# what turns the serial beat count into the actual round-time depth Chapter 5 needs.
+def op_ions(d: int, op) -> set:
+    """The ions an operation moves, tagged ('a', check) / ('d', (r,c)) / ('c', lane).
+    Markers (round, syndromes, prep, reset_done) move nothing and return an empty set."""
+    v = op[0]
+    if v in ("inrow", "swap", "xgate"):
+        return {("a", s) for s, rc in op[2]} | {("d", rc) for s, rc in op[2]}
+    if v in ("readout", "reset"):
+        return {("a", s) for s, rc in op[1]} | {("d", rc) for s, rc in op[1]}
+    if v in ("xlift", "xlower"):
+        return {("a", s) for s, c, ac, tr in op[2]}
+    if v == "xdrop":
+        return {("a", s) for s, c, ac in op[2]}
+    if v in ("comm_out", "comm_arrive", "comm_lift", "comm_lower"):
+        return {("c", l) for l in op[2]}
+    if v == "comm_back":
+        r = {("c", l) for l in op[2]}
+        return r | ({("d", (l, d - 1)) for l in op[2]} if op[3] == "same" else set())
+    if v == "comm_gate":
+        return {("c", l) for l, rc in op[2]} | {("d", rc) for l, rc in op[2]}
+    if v in ("measure", "herald"):
+        return {("c", l) for l in op[1]}
+    if v in ("park", "unpark"):
+        return {("a", op[1])}
+    return set()
+
+
+def parallel_steps(d: int, merge: bool = False, rounds: int = 1) -> list:
+    """Greedily pack round_ops into simultaneous time-steps. An operation joins the
+    earliest step that is after every ion it needs was last touched and shares no ion
+    with the operations already in that step. Markers carry no ion and are dropped.
+    Returns the list of steps (each a list of op indices); its length is the parallel
+    depth, at or below the serial beat count."""
+    ops = round_ops(d, merge, rounds)
+    step_ops, step_ions, ion_last = [], [], {}
+    for i, op in enumerate(ops):
+        ions = op_ions(d, op)
+        if not ions:
+            continue
+        t = max([ion_last[x] for x in ions if x in ion_last], default=-1) + 1
+        while t < len(step_ions) and (step_ions[t] & ions):
+            t += 1
+        if t == len(step_ions):
+            step_ops.append([]); step_ions.append(set())
+        step_ops[t].append(i); step_ions[t] |= ions
+        for x in ions:
+            ion_last[x] = t
+    return step_ops
 
 
 
@@ -831,7 +907,33 @@ def check_junctions(d: int) -> None:
 
 # --- RUN -------------------------------------------------------------------
 # Run the checks. Print pass or fail.
+def report(d: int) -> None:
+    """Build and certify the whole schedule for one distance, and print its numbers.
+    Usage: python3 qec_scheduler.py 7   (d must be an odd integer >= 3)."""
+    assert isinstance(d, int) and d >= 3 and d % 2 == 1, "d must be an odd integer >= 3"
+    checks = [check_census, check_no_double_touch, check_placement, check_junctions,
+              check_gate_zone, check_parallel_crossings, check_seam_fits, check_seam_census,
+              check_merge_demand, check_comm_ions, check_seam_schedule, check_merge_no_crowding,
+              check_lane_clearing, check_round_ops]
+    for chk in checks:
+        chk(d)
+    if d == 3:
+        check_d3_matches_reference()
+    t = op_tally(d, merge=True, rounds=d)
+    ps = len(parallel_steps(d, merge=True, rounds=d))
+    print(f"d={d}: all {len(checks) + (d == 3)} checks PASS")
+    print(f"  per-cell ancillas {per_cell_ancillas(d)}  (max {max(per_cell_ancillas(d))})")
+    print(f"  seam: {bell_pairs_per_round(d)} Bell pairs/round, {d} comm lanes ({d - 1} used + 1 spare)")
+    print(f"  blocked comm lanes {blocked_lanes(d)}; bottom cell gains {bottom_park_wells(d)} park wells")
+    print(f"  full d={d} merge: {t['total_beats']} serial beats -> {ps} parallel time-steps; {t['two_qubit_gates']} two-qubit gates")
+    print(f"  by kind: {t['by_kind']}")
+
+
 if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1:
+        report(int(sys.argv[1]))
+        sys.exit(0)
     try:
         for d in (3, 5, 7, 9, 11):
             check_census(d)
@@ -913,6 +1015,12 @@ if __name__ == "__main__":
             t = op_tally(3, mg, rr)
             print(f"  {lbl}: {t['total_beats']:3d} serial beats, {t['two_qubit_gates']:2d} two-qubit gates")
             print(f"      by kind: {t['by_kind']}")
+        print("parallelism (serial listing is an upper bound; disjoint-ion ops share a step):")
+        for lbl, mg, rr in [("local round     ", False, 1), ("one merge round  ", True, 1), ("full merge       ", True, None)]:
+            for dd in (3, 5):
+                rounds = dd if rr is None else rr
+                t = op_tally(dd, mg, rounds); ps = len(parallel_steps(dd, mg, rounds))
+                print(f"  d={dd} {lbl}: {t['total_beats']:3d} serial beats -> {ps:2d} parallel time-steps")
         print(f"  comm-ion count ...... note: {comm_ions_per_lane()} per lane, cycling herald/deliver/measure/re-herald (a herald pool is a Ch5 option)")
         for d in (3, 5, 7):
             print(f"    d={d}: cells stay {per_cell_ancillas(d)} (max {d}); a new seam ancilla per check would force max {netnew_busiest(d)}; blocked lanes {blocked_lanes(d)} clear to spare/routing")

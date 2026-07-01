@@ -18,49 +18,65 @@ Run:  python3 qec_visualizer.py
 """
 from __future__ import annotations
 import json
-from qec_scheduler import build_stabilizers, place, stab_cell, num, seam_schedule, round_ops
+from qec_scheduler import build_stabilizers, place, stab_cell, num, seam_schedule, round_ops, parallel_steps
 
 D = 3
 MERGE_ROUNDS = 2
 
-# ----- human labels for the d=3 checks --------------------------------------
+# ----- geometry primitives (independent of d) -------------------------------
+XS = 150.0
+IW = 11                                             # in-well half-offset
+def X(col): return 185 + (col + 0.5) * XS
+def JX(c):  return X(c) + XS / 4                    # gate-zone junction, in the gap
+def gap_y(a, b): return (CY[a] + CY[b]) / 2
+def data_col(n): return (n - 1) % D
+def data_row(n): return (n - 1) // D
+
+# ----- labels: the named d=3 checks, generic A (bulk) / B (edge) beyond ------
 NAMES = {frozenset({1, 2, 4, 5}): "A1", frozenset({2, 3, 5, 6}): "A2",
          frozenset({4, 5, 7, 8}): "A3", frozenset({5, 6, 8, 9}): "A4",
          frozenset({2, 3}): "B1", frozenset({7, 8}): "B2",
          frozenset({1, 4}): "B3", frozenset({6, 9}): "B4"}
-STABS = build_stabilizers(D)
-LABEL = {s: NAMES[frozenset(num(rc, D) for rc in s.data)] for s in STABS}
-KIND = {s: s.kind for s in STABS}
-CELL = stab_cell(D)
-SEAM = seam_schedule(D)                             # {s: {same, cross, junction}}
+def make_labels(stabs):
+    out, a, b = {}, 1, 1
+    for s in stabs:
+        if s.weight == 4: out[s] = "A%d" % a; a += 1
+        else:             out[s] = "B%d" % b; b += 1
+    return out
 
-# ----- geometry -------------------------------------------------------------
-CY = {0: 90, 1: 220, 2: 350}
-XS = 150.0
-def X(col): return 185 + (col + 0.5) * XS
-def gap_y(a, b): return (CY[a] + CY[b]) / 2
-def JX(c): return X(c) + XS / 4                     # gate-zone junction, in the gap
-XIF = X(D - 0.5) + 140                              # interface zone (cavities), past the SPAM/readout end
-def data_col(n):  return (n - 1) % D
-def data_row(n):  return (n - 1) // D
 
-ACOL = {}
-CHAINS = place(D)
-for i, cell in enumerate(CHAINS):
-    for j, (kind, item) in enumerate(cell):
-        if kind == "anc":
-            lft = cell[j - 1] if j > 0 else None
-            rgt = cell[j + 1] if j < len(cell) - 1 else None
-            if lft and lft[0] == "data" and rgt and rgt[0] == "data":
-                ACOL[item] = (lft[1][1] + rgt[1][1]) / 2
-            elif lft is None:
-                ACOL[item] = -0.5
-            else:
-                ACOL[item] = D - 0.5
+def set_distance(d):
+    """Rebuild every d-dependent table so the visualizer draws any distance. Cells
+    stack 130 px apart; the interface sits just past the readout end."""
+    global D, STABS, LABEL, KIND, CELL, SEAM, CY, XIF, ACOL, CHAINS, ID_OF_STAB, ID_OF_DATA
+    D = d
+    STABS = build_stabilizers(d)
+    LABEL = ({s: NAMES[frozenset(num(rc, d) for rc in s.data)] for s in STABS}
+             if d == 3 else make_labels(STABS))
+    KIND = {s: s.kind for s in STABS}
+    CELL = stab_cell(d)
+    SEAM = seam_schedule(d)
+    CY = {r: 90 + 130 * r for r in range(d)}
+    _npark = sum(1 for s in STABS if s.weight == 2 and s.kind == "Z" and all(c == d - 1 for r, c in s.data))
+    XIF = X(d - 0.5) + 48 * _npark + 120                # leave room for the bottom cell's park wells before the interface
+    CHAINS = place(d)
+    ACOL = {}
+    for cell in CHAINS:
+        for j, (kind, item) in enumerate(cell):
+            if kind == "anc":
+                lft = cell[j - 1] if j > 0 else None
+                rgt = cell[j + 1] if j < len(cell) - 1 else None
+                if lft and lft[0] == "data" and rgt and rgt[0] == "data":
+                    ACOL[item] = (lft[1][1] + rgt[1][1]) / 2
+                elif lft is None:
+                    ACOL[item] = -0.5
+                else:
+                    ACOL[item] = d - 0.5
+    ID_OF_STAB = {s: LABEL[s] for s in STABS}
+    ID_OF_DATA = {(data_row(n), data_col(n)): "d%d" % n for n in range(1, d * d + 1)}
 
-ID_OF_STAB = {s: LABEL[s] for s in STABS}
-ID_OF_DATA = {(data_row(n), data_col(n)): "d%d" % n for n in range(1, D * D + 1)}
-IW = 11                                             # in-well half-offset
+
+set_distance(3)
 
 
 def is_right_boundary(s):
@@ -84,16 +100,18 @@ def base_ions(merge):
     return ions, home
 
 
-def build(merge=False, rounds=1):
+def build(merge=False, rounds=1, d=3):
+    set_distance(d)
     ions, home = base_ions(merge)
     pos = {i: home[i][:] for i in ions}
     FR = []
-    parked = [(LABEL[s], CELL[s]) for s in STABS if is_right_boundary(s)] if merge else []
-    parked_labels = {lab for lab, _ in parked}
+    _ops = round_ops(D, merge, rounds)
+    _pstep = {i: t for t, ixs in enumerate(parallel_steps(D, merge, rounds)) for i in ixs}
+    cur = [None]                                        # parallel time-step of the op being rendered
 
     def snap(cap, hi=None, junc=None, badge="", merged=None):
         FR.append({"pos": {i: pos[i][:] for i in pos}, "cap": cap, "hi": hi or [],
-                   "junc": junc or [], "badge": badge,
+                   "junc": junc or [], "badge": badge, "pstep": cur[0],
                    "merged": [sorted(p) for p in (merged or [])]})
 
     def setp(i, x, y): pos[i] = [x, y]
@@ -125,7 +143,8 @@ def build(merge=False, rounds=1):
 
     # --- one handler per operation the scheduler emits.  The sequence, the
     #     batching, and the beats all come from round_ops; this only places them.
-    for op in round_ops(D, merge, rounds):
+    for _i, op in enumerate(_ops):
+        cur[0] = _pstep.get(_i)
         v = op[0]
         if v == "prep":
             snap(f"Start of the {'merge' if op[1] else 'round'}: data and ancillas in memory wells, ancillas in their basis."
@@ -133,21 +152,25 @@ def build(merge=False, rounds=1):
         elif v == "round":
             snap(f"Round {op[1] + 1} of {op[2]}.", badge=f"round {op[1] + 1}")
         elif v == "park":
-            jn = [(D - 1, cl) for _, cl in op[1]]; hi = [A(s) for s, _ in op[1]]
-            for s, cl in op[1]:
-                setp(A(s), JX(D - 1), gap_y(cl, cl + 1))
-            snap("The idle right-boundary ancilla lifts into the gate-zone junction toward the bottom cell.", junc=jn, hi=hi)
-            for s, cl in op[1]:
-                setp(A(s), X(D - 0.5), CY[D - 1])
-            snap("It settles in the bottom cell's spare well, clearing its comm lane for the whole merge.", junc=jn, hi=hi)
+            # route through the boundary junction (column d-1) down to a park well on the
+            # bottom cell's row -- the plan and order come from scheduler.park_plan
+            s, cl, well = op[1], op[2], op[3]; aid = A(s)
+            setp(aid, JX(D - 1), CY[cl])
+            snap(f"Idle ancilla {aid} shuttles along its row to the boundary junction, the rightmost.", hi=[aid])
+            setp(aid, JX(D - 1), CY[D - 1])
+            snap(f"It descends the boundary junction to the bottom cell.", hi=[aid],
+                 junc=[(D - 1, k) for k in range(cl, D - 1)])
+            setp(aid, X(D - 0.5) + 48 * (well + 1), CY[D - 1])
+            snap(f"It parks in a spare well on the bottom cell's row, clearing its comm lane.", hi=[aid])
         elif v == "unpark":
-            jn = [(D - 1, cl) for _, cl in op[1]]; hi = [A(s) for s, _ in op[1]]
-            for s, cl in op[1]:
-                setp(A(s), JX(D - 1), gap_y(cl, cl + 1))
-            snap("The merge ends; the right-boundary ancilla lifts back into the gate-zone junction.", junc=jn, hi=hi)
-            for s, cl in op[1]:
-                setp(A(s), *home[A(s)])
-            snap("It returns to its home well.", junc=jn, hi=hi)
+            s, cl, well = op[1], op[2], op[3]; aid = A(s)
+            setp(aid, JX(D - 1), CY[D - 1])
+            snap(f"Ancilla {aid} shuttles back to the boundary junction.", hi=[aid])
+            setp(aid, JX(D - 1), CY[cl])
+            snap(f"It ascends the boundary junction to its home cell.", hi=[aid],
+                 junc=[(D - 1, k) for k in range(cl, D - 1)])
+            setp(aid, *home[aid])
+            snap(f"It returns to its home well.", hi=[aid])
         elif v == "inrow":
             L = op[1] + 1; hi = [A(s) for s, _ in op[2]]
             for s, rc in op[2]:
@@ -270,6 +293,7 @@ button{border:1px solid var(--line);background:var(--panel);color:var(--ink);bor
 button:disabled{opacity:.4}button.play{background:var(--purple);color:#fff;border-color:var(--purple)}
 #slider{flex:1;min-width:150px}.sname{font-size:13px;font-weight:600;min-width:74px}
 .badge{font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;background:#E1F5EE;color:var(--teal)}
+.pstep{font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;background:#EEEDFB;color:var(--purple)}
 .verify{font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;background:#E1F5EE;color:var(--teal)}
 .verify.bad{background:var(--redbg);color:var(--red)}
 .cap{font-size:13.5px;color:var(--mut);min-height:40px;margin:4px 0}
@@ -281,7 +305,7 @@ button:disabled{opacity:.4}button.play{background:var(--purple);color:#fff;borde
 <div class="sub">__SUB__ A live verifier checks every frame for overlap.</div>
 <div class="bar"><button id="prev">&lsaquo; Prev</button><button id="next">Next &rsaquo;</button>
 <button id="play" class="play">&#9654; Play</button><input id="slider" type="range" min="0" max="0" value="0"/>
-<span class="sname" id="sname"></span><span class="badge" id="badge"></span><span class="verify" id="verify"></span></div>
+<span class="sname" id="sname"></span><span class="pstep" id="pstep"></span><span class="badge" id="badge"></span><span class="verify" id="verify"></span></div>
 <div class="cap" id="cap"></div>
 <div class="card"><svg id="stage" role="img"></svg></div>
 <div class="legend"><span><i style="border-radius:50%;background:var(--panel);border:1px solid var(--line)"></i>data</span>
@@ -292,7 +316,7 @@ __COMMLEG__</div>
 const DATA=__DATA__;
 const NS="http://www.w3.org/2000/svg",E=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
 const $=i=>document.getElementById(i),svg=$("stage");
-const W=DATA.xhi,H=DATA.celly[DATA.celly.length-1]+70;
+const W=DATA.xhi,H=DATA.hmax||(DATA.celly[DATA.celly.length-1]+70);
 svg.setAttribute("viewBox","0 0 "+W+" "+H);
 const gZ=E("g",{}),gWell=E("g",{}),gJ=E("g",{}),gW=E("g",{}),gI=E("g",{});
 [gZ,gWell,gJ,gW,gI].forEach(g=>svg.appendChild(g));
@@ -303,6 +327,7 @@ if(DATA.xif){const t=E("text",{x:DATA.xif-6,y:DATA.celly[0]-31,"font-size":11,fi
 (DATA.wells||[]).forEach(w=>{gWell.appendChild(E("rect",{x:w[0]-22,y:w[1]-19,width:44,height:38,rx:10,fill:"var(--panel)",stroke:"var(--line)","stroke-width":1.2}));});
 const jel={};DATA.junctions.forEach(j=>{const lane=E("line",{x1:j.x,y1:j.y1+24,x2:j.x,y2:j.y2-24,stroke:"var(--line)","stroke-width":2.5,opacity:.5,"stroke-linecap":"round"});
  gJ.appendChild(lane);gJ.appendChild(E("circle",{cx:j.x,cy:j.y1+24,r:3.4,fill:"var(--mut)"}));gJ.appendChild(E("circle",{cx:j.x,cy:j.y2-24,r:3.4,fill:"var(--mut)"}));jel[j.c+"_"+j.b]=lane;});
+if(DATA.parklane){const p=DATA.parklane;gJ.appendChild(E("line",{x1:p.x,y1:p.y1,x2:p.x,y2:p.y2,stroke:"var(--line)","stroke-width":2,"stroke-dasharray":"4 4",opacity:.6,"stroke-linecap":"round"}));const t=E("text",{x:p.x+7,y:p.y2-2,"font-size":10,fill:"var(--mut)"});t.textContent="spare reservoir";gJ.appendChild(t);}
 const el={};for(const id in DATA.ions){const lab=DATA.ions[id][0],typ=DATA.ions[id][1],g=E("g",{});g.style.transition="transform .3s ease";
  if(typ==="data"){g.appendChild(E("circle",{cx:0,cy:0,r:15,fill:"var(--panel)",stroke:"var(--line)","stroke-width":1.4}));
   const t=E("text",{x:0,y:4,"text-anchor":"middle","font-size":10,fill:"var(--ink)"});t.textContent=lab;g.appendChild(t);el[id]={g};}
@@ -317,6 +342,7 @@ function verify(f){const mg=new Set((f.merged||[]).map(p=>p.join("|"))),by={};
   for(let i=1;i<a.length;i++){if(Math.abs(a[i][0]-a[i-1][0])<30){const k=[a[i-1][1],a[i][1]].sort().join("|");if(!mg.has(k))return a[i-1][1]+" & "+a[i][1];}}}return null;}
 let step=0;function render(){const f=DATA.frames[step];
  $("cap").textContent=f.cap;$("badge").textContent=f.badge||"";$("sname").textContent=(step+1)+" / "+DATA.frames.length;$("slider").value=step;
+ $("pstep").textContent=(f.pstep==null?"":"time-step "+(f.pstep+1)+" / "+DATA.nsteps);
  const v=verify(f),ve=$("verify");if(v){ve.textContent="⚠ overlap "+v;ve.classList.add("bad");}else{ve.textContent="✓ no overlap";ve.classList.remove("bad");}
  for(const k in jel){jel[k].setAttribute("stroke","var(--line)");jel[k].setAttribute("stroke-width",2.5);jel[k].setAttribute("opacity",.5);}
  (f.junc||[]).forEach(j=>{const k=j[0]+"_"+j[1];if(jel[k]){jel[k].setAttribute("stroke","var(--amber)");jel[k].setAttribute("stroke-width",4);jel[k].setAttribute("opacity",1);}});
@@ -339,18 +365,21 @@ render();
 </script></body></html>"""
 
 
-def write_html(path, merge, rounds):
-    FR, ions, home = build(merge, rounds)
+def write_html(path, merge, rounds, d=3):
+    FR, ions, home = build(merge, rounds, d)
     bad = [(k, bad_frame(f)) for k, f in enumerate(FR) if bad_frame(f)]
     wells = [home[i] for i in ions if ions[i][1] in ("data", "X", "Z")]
-    data = {"ions": ions, "frames": FR, "celly": [CY[0], CY[1], CY[2]],
+    npark = sum(1 for s in STABS if is_right_boundary(s)) if merge else 0
+    park = [[X(D - 0.5) + 48 * (k + 1), CY[D - 1]] for k in range(npark)]   # park wells appended to the bottom cell's row
+    data = {"ions": ions, "frames": FR, "celly": [CY[r] for r in range(D)],
             "junctions": [{"c": c, "b": b, "x": JX(c), "y1": CY[b], "y2": CY[b + 1]}
                           for c in range(D) for b in range(D - 1)],
-            "wells": wells, "xlo": X(-0.5) - 45,
+            "wells": wells + park, "nsteps": len(parallel_steps(D, merge, rounds)),
+            "xlo": X(-0.5) - 45,
             "xhi": (XIF + 70) if merge else (X(D - 0.5) + 60), "xif": XIF if merge else 0}
-    title = (f"Distance-3 remote merge - {rounds} rounds, one comm ion per lane"
-             if merge else "Distance-3 error-correction round - balanced {3,3,2}")
-    sub = ("Two full merge rounds. One comm ion per lane cycles herald, deliver, measure, re-herald; "
+    title = (f"Distance-{D} remote merge, {rounds} rounds, one comm ion per lane"
+             if merge else f"Distance-{D} error-correction round")
+    sub = (f"{rounds} full merge rounds. One comm ion per lane cycles herald, deliver, measure, re-herald; "
            "junctions are gate-zone only and physical swaps happen in wells."
            if merge else "One code row per cell; ions sit in wells and swap in wells, junctions link neighbouring cells.")
     commleg = '<span><i style="border-radius:2px;background:var(--teal)"></i>comm ion</span>' if merge else ""
@@ -362,10 +391,12 @@ def write_html(path, merge, rounds):
 
 
 if __name__ == "__main__":
-    for merge, rounds, path in [(False, 1, "qec_round_sim_d3.html"),
-                                (True, MERGE_ROUNDS, "qec_merge_full_sim_d3.html")]:
-        n, bad = write_html(path, merge, rounds)
-        tag = "merge" if merge else "round"
-        print(f"{tag:6s}: {n} frames, {len(bad)} overlaps -> {path}")
-        for k, b in bad[:8]:
-            print(f"   frame {k}: {b}")
+    import sys
+    ds = [int(sys.argv[1])] if len(sys.argv) > 1 else [3, 5]
+    for d in ds:
+        for merge, rounds, tag in [(False, 1, "round"), (True, MERGE_ROUNDS, "merge_full")]:
+            path = f"qec_{tag}_sim_d{d}.html"
+            n, bad = write_html(path, merge, rounds, d)
+            print(f"d={d} {tag:10s}: {n} frames, {len(bad)} overlaps -> {path}")
+            for k, b in bad[:8]:
+                print(f"   frame {k}: {b}")
