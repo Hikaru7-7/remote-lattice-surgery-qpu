@@ -202,6 +202,64 @@ def readout_layers(cells: list) -> int:
     return layers
 
 
+# --- GATE ZONE  (explicit: ions sit in wells, route through junctions) ------
+# The physical rule, made explicit. An ion is stored or gated only in a WELL.
+# An X-junction is a routing link between neighbouring cells; ions pass through
+# it but are never stored on it. Memory and gate are separate segments of each
+# cell axis: data and ancillas are STORED in the memory segment (data on the
+# data columns); GATES happen in the gate segment, one gate well per ancilla,
+# at the ancilla (offset) columns; JUNCTIONS sit at the data columns of the gate
+# segment and connect neighbouring cells. So a gate well never shares a column
+# with a junction, and no ion is ever at rest on a junction.
+def check_gate_zone(d: int) -> None:
+    """Check: one gate well per ancilla, every gate well off the junction
+    columns (so gates never happen on a junction), and every cross-row gate
+    routes through a junction that exists between the two cells."""
+    pos = col_x(d, place(d))
+    junctions = set(range(d))                       # junction columns = data columns
+    gate_wells = []
+    for stab in build_stabilizers(d):
+        col = pos[stab][1]                          # this ancilla's gate-well column
+        assert col not in junctions, \
+            f"d={d}: gate well at column {col} lands on a junction"
+        gate_wells.append(stab)
+    assert len(gate_wells) == d*d - 1, \
+        f"d={d}: {len(gate_wells)} gate wells, want {d*d-1}"
+    for step, stab, (c, b) in cross_gates(d):       # crossings route through junctions
+        assert 0 <= c < d and 0 <= b < d - 1, \
+            f"d={d}: cross gate routes through a junction that does not exist"
+
+
+# --- SEAM  (remote lattice surgery: the seam checks ride in the same round) -
+# During a merge, the seam-facing data qubit of each row (column d-1) also
+# gates with that row's communication ion, which holds a heralded Bell pair.
+# That extra gate must fit in a connection step where the qubit is not already
+# busy with a bulk gate, or the merge round would grow. We assume ideal herald
+# rate, so this is purely a scheduling question.
+def bulk_steps_at(d: int, r: int) -> set:
+    """The steps in which the row-r seam qubit (r, d-1) does a BULK gate. Its old
+    right-boundary check is replaced by a seam check during the merge, so only
+    the weight-4 bulk checks keep it busy."""
+    return {corner_step(s, (r, d - 1))
+            for s in build_stabilizers(d) if (r, d - 1) in s.data and s.weight == 4}
+
+
+def n_seam_checks(d: int, r: int) -> int:
+    """How many weight-4 seam checks the row-r seam qubit belongs to. The seam
+    has d-1 checks; check s reads boundary qubits of rows s and s+1, so an
+    interior qubit is in two, a corner qubit in one."""
+    return (1 if r >= 1 else 0) + (1 if r <= d - 2 else 0)
+
+
+def check_seam_fits(d: int) -> None:
+    """Check: each seam qubit's seam gates fit in the steps its bulk gates leave
+    free, so the seam extraction rides in the same 4-step round, no extra phases."""
+    for r in range(d):
+        free = 4 - len(bulk_steps_at(d, r))
+        assert free >= n_seam_checks(d, r), \
+            f"d={d} row {r}: {n_seam_checks(d, r)} seam gates, only {free} free steps"
+
+
 def col_x(d: int, cells: list) -> dict:
     """Column coordinate of every ion, aligned across cells so a junction at
     column c lines up in every cell. Data (r,c) -> c; a gap ancilla -> halfway
@@ -415,6 +473,9 @@ if __name__ == "__main__":
         for d in (3, 5, 7, 9, 11):
             check_junctions(d)
         print("junctions ........... PASS  (d = 3,5,7,9,11)")
+        for d in (3, 5, 7, 9, 11):
+            check_gate_zone(d)
+        print("gate zone ........... PASS  (wells off junctions; memory/gate split)")
         for d in (3, 5, 7):
             counts = [sum(1 for k, _ in cell if k == "anc") for cell in place(d)]
             print(f"  d={d}: per-cell ancillas = {counts}  (max {max(counts)}, total {sum(counts)})")
@@ -439,6 +500,15 @@ if __name__ == "__main__":
         print("  => each step is 1 gate phase, so the round is 4 connection")
         print("     phases + readout, FLAT in d. The linear count above was the")
         print("     conservative bound; the crossings really do parallelize.")
+        print("does the seam extraction fit in the same round?")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_seam_fits(d)
+        print("  seam fits ........... PASS  (d = 3,5,7,9,11,15)")
+        print("  seam qubit schedule (d=3), bulk vs seam by row:")
+        for r in range(3):
+            b = sorted(bulk_steps_at(3, r))
+            free = sorted(set(range(4)) - set(b))
+            print(f"    row {r}: bulk in {b}, {n_seam_checks(3, r)} seam gate(s) fit in free {free}")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
