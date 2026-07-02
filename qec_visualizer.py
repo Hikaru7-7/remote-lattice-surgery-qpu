@@ -160,14 +160,14 @@ def build(merge=False, rounds=1, d=3):
             for s, cl, well in plan:
                 setp(A(s), JX(D - 1), CY[cl])
             snap("The idle right-boundary ancillas shuttle to the boundary junction together, each in its own row.", hi=hi)
-            for s, cl, well in sorted(plan, key=lambda p: -p[1]):
+            for s, cl, well in plan:                    # plan is already in routing order (bottom-most first)
                 setp(A(s), JX(D - 1), CY[D - 1])
                 snap(f"{A(s)} descends the boundary junction to the bottom cell.", hi=[A(s)], junc=[(D - 1, k) for k in range(cl, D - 1)])
                 setp(A(s), X(D - 0.5) + 48 * (well + 1), CY[D - 1])
                 snap(f"It parks in its spare well on the bottom cell's row.", hi=[A(s)])
         elif v == "unpark":
             plan = op[1]; hi = [A(s) for s, cl, well in plan]
-            for s, cl, well in sorted(plan, key=lambda p: p[1]):
+            for s, cl, well in reversed(plan):          # reverse routing order: nearest well leaves first
                 setp(A(s), JX(D - 1), CY[D - 1])
                 snap(f"{A(s)} leaves its park well for the boundary junction.", hi=[A(s)])
                 setp(A(s), JX(D - 1), CY[cl])
@@ -275,6 +275,9 @@ def build(merge=False, rounds=1, d=3):
                  hi=[LABEL[s] for s in STABS if not (merge and is_right_boundary(s))])
         elif v == "herald":
             snap("The comm ions herald a fresh Bell pair at their cavities.", hi=[C(l) for l in op[1]])
+        else:
+            # the contract: every operation the scheduler emits must be rendered
+            raise ValueError(f"no renderer for scheduler op {v!r}")
     return FR, ions, home
 
 

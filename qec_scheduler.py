@@ -603,17 +603,21 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
 
 def check_round_ops(d: int) -> None:
     """Check: a local round's operations gate every (check, data) coupling exactly
-    once, every op is a known verb, and a swap only ever pairs an ancilla with data."""
+    once, every op is a known verb, every swap lands on a real grid site, and the
+    packed round is exactly 27+d time-steps deep."""
     ops = round_ops(d, merge=False, rounds=1)
     for op in ops:
         assert op[0] in BEATS, f"d={d}: unknown operation {op[0]}"
     gated = [pair for op in ops if op[0] in ("inrow", "xgate") for pair in op[2]]
     want = [(s, rc) for s in build_stabilizers(d) for rc in s.data]
     assert len(gated) == len(want) and set(gated) == set(want), f"d={d}: gate coverage off"
-    for op in ops:                                     # a swap pairs an ancilla with a data qubit
+    for op in ops:                                     # every swap partner is a real grid site
         if op[0] == "swap":
             for s, rc in op[2]:
-                assert rc in s.data or True, ""        # rc is a grid coordinate, ancilla is s
+                assert isinstance(rc, tuple) and len(rc) == 2 and \
+                    0 <= rc[0] < d and 0 <= rc[1] < d, f"d={d}: swap onto bad site {rc}"
+    # the packed local round is exactly 27+d deep: 24 connection + (d+3) readout
+    assert len(parallel_steps(d, merge=False)) == 27 + d, f"d={d}: round depth is not 27+d"
     # a merge adds the seam: d-1 comm deliveries, each two gates (same + cross)
     m = round_ops(d, merge=True, rounds=1)
     cg = sum(len(op[2]) for op in m if op[0] == "comm_gate")
