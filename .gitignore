@@ -1,17 +1,3 @@
 __pycache__/
 *.pyc
 .DS_Store
-_recovered/
-*_preview.png
-/ch4_placement.pdf
-/ch4_round.pdf
-/ch4_scaling.pdf
-*.aux
-*.log
-*.out
-*.toc
-*.lof
-*.lot
-*.fls
-*.fdb_latexmk
-*.synctex.gz
