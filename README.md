@@ -41,7 +41,14 @@ Checks pass at every odd distance tried up to `python3 qec_scheduler.py 27`.
 
 ## Viewing the animations
 
-Open any HTML file in a browser. No server needed. Use Prev / Next, the
+Watch them in the browser, nothing to download:
+
+| | d = 3 | d = 5 | d = 7 |
+|---|---|---|---|
+| One local round | [round d3](https://hikaru7-7.github.io/remote-qec-scheduler/qec_round_sim_d3.html) | [round d5](https://hikaru7-7.github.io/remote-qec-scheduler/qec_round_sim_d5.html) | [round d7](https://hikaru7-7.github.io/remote-qec-scheduler/qec_round_sim_d7.html) |
+| Full merge | [merge d3](https://hikaru7-7.github.io/remote-qec-scheduler/qec_merge_full_sim_d3.html) | [merge d5](https://hikaru7-7.github.io/remote-qec-scheduler/qec_merge_full_sim_d5.html) | [merge d7](https://hikaru7-7.github.io/remote-qec-scheduler/qec_merge_full_sim_d7.html) |
+
+Or open any HTML file locally in a browser. No server needed. Use Prev / Next, the
 slider, or Play. Each frame shows a caption of the physical operation, the
 parallel time-step it belongs to, and a live verifier badge that turns red if
 any two ions in that frame overlap. It never does. The badge is computed in
