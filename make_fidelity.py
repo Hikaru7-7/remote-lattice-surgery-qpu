@@ -54,3 +54,12 @@ if __name__ == "__main__":
     assert 2e-4 < tr_base / 50.0 < 3e-4   # ~2e-4, the prose number
     print("\nthe memory line sits one to two orders below the floor;")
     print("waiting is not the binding term.")
+
+    # required visibility: F = (1+V)/2 when distinguishability is the only
+    # imperfection, so eps = (1-V)/2 and the floor inverts to V >= 1-2 eps.
+    print("\nrequired two-photon visibility, V >= 1 - 2 eps_max:")
+    for name, p in P_LOC.items():
+        v = 1.0 - 2.0 * share * p
+        print(f"  p_loc = {p:.0e}  ({name}):  V >= {100*v:.1f}%")
+    assert abs((1 - 2*share*1e-3) - 0.992) < 1e-12
+    assert abs((1 - 2*share*3e-3) - 0.976) < 1e-12
