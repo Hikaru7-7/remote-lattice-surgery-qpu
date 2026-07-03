@@ -1,6 +1,6 @@
 # remote-qec-scheduler
 
-A scheduling feasibility certifier for a modular trapped-ion quantum computer.
+A scheduling and timing simulator for a modular trapped-ion quantum computer.
 It builds one full round of surface-code error correction, and a complete
 remote lattice-surgery merge across two modules, as an ordered list of physical
 operations on a segmented ion trap. Then it checks, at every code distance,
@@ -17,7 +17,7 @@ be scheduled without conflict. It returns no logical error rate.
 
 ## Requirements
 
-Python 3. Nothing else. Both programs use only the standard library.
+Python 3. Nothing else. All three programs use only the standard library.
 
 ## Run it
 
@@ -27,6 +27,7 @@ python3 qec_scheduler.py 7      # one-distance report: placement, seam, depth, t
 python3 qec_visualizer.py      # build the d=3 and d=5 HTML animations
 python3 qec_visualizer.py 7    # build the d=7 HTML animations
 python3 qec_visualizer.py all  # rebuild every odd d = 3..27 and print the sweep table
+python3 qec_timing.py          # price the schedule in seconds: durations, T_round, T_merge, demand rate
 ```
 
 The default run ends by certifying every odd distance up to 27, so the claim
@@ -38,6 +39,7 @@ in the thesis is exactly what the command shows. One distance at a time is
 | File | What it is |
 |---|---|
 | `qec_scheduler.py` | The source of truth. Builds the distance-d rotated surface code, places every ion on the chip, emits the schedule (`round_ops`), packs it into parallel time-steps (`parallel_steps`), and runs the structural checks. `op_tally` counts every physical beat so a duration model can turn the schedule into a round time. |
+| `qec_timing.py` | Prices the certified schedule in seconds. Each packed step costs its slowest operation; per-beat durations are traced to published demonstrations and bracketed optimistic/baseline/conservative. Every round-time and demand-rate number in the thesis reprints from this file. |
 | `qec_visualizer.py` | Renders the scheduler's operation list, unchanged, as an interactive HTML animation. It assigns pixel coordinates and nothing else. It also runs its own overlap check on every frame, written independently of the scheduler's checks, so two separate programs agree the motion is legal. |
 | `qec_round_sim_d{3,5,7}.html` | One local error-correction round at that distance. |
 | `qec_merge_full_sim_d{3,5,7}.html` | Two rounds of the remote lattice-surgery merge, the seam read by communication ions. The full d-round merge is packed and certified in the scheduler. |
