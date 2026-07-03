@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""make_fidelity.py -- the fidelity track of thesis Section 5.3.
+
+The seam-grade floor. Ramette et al. (npj QI 10:58, 2024) show the merged
+patch fails as two decoupled systems, bulk and seam, with thresholds near
+1% per local gate and 10% per Bell pair. Holding the seam to the bulk's
+standard gives eps_eff <= 10 p_loc. The seam check spends local work too,
+two copy gates and one read per module each round (six local operations
+per check, charged in full), so the pair's share is
+
+    eps  <=  (10 - 6) p_loc  =  4 p_loc        (the seam-grade floor)
+
+The memory line. The stored half of a pipelined pair waits at most one
+round. Charged in full as T_round / T2 (upper bound, no decay-shape
+argument), with T_round live from qec_timing.py and T2 anchored at the
+clock-qubit demonstrations cited in the thesis (50 s Ca-43 with nothing,
+10 min Yb-171 with dynamical decoupling).
+
+Run:  python3 make_fidelity.py
+"""
+import sys
+import qec_timing as T
+
+D = 7
+MULTIPLIER = 10          # Ramette Eq. (7) working number (14 = matched cut)
+COMM_OPS = 6             # 2 copy gates + 1 read, per module, per check
+P_LOC = {"family floor (Loeschnauer 2024)": 1e-3,
+         "demonstrated 99.7% (Harty 2016)": 3e-3}
+T2_S = {"Ca-43 clock, no decoupling (Harty 2014)": 50.0,
+        "Yb-171 clock, decoupled (Wang 2017)": 600.0}
+BRACKETS = ("optimistic", "baseline", "conservative")
+
+if __name__ == "__main__":
+    d = int(sys.argv[1]) if len(sys.argv) > 1 else D
+    share = MULTIPLIER - COMM_OPS
+    print(f"seam-grade floor at d={d}:  eps <= ({MULTIPLIER} - {COMM_OPS}) "
+          f"p_loc = {share} p_loc")
+    for name, p in P_LOC.items():
+        eps = share * p
+        print(f"  p_loc = {p:.0e}  ({name}):  eps_max = {eps:.1e}"
+              f"  ->  F_raw >= {1-eps:.3f}")
+    # asserted against the 5.3 prose
+    assert share == 4
+    assert abs(share * 1e-3 - 4e-3) < 1e-12
+    assert abs(share * 3e-3 - 1.2e-2) < 1e-12
+
+    print(f"\nmemory line, full T_round/T2 (stored half waits one round):")
+    for k, br in enumerate(BRACKETS):
+        tr = T.schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6
+        line = " ".join(f"{tr/t2:.1e} ({nm.split(',')[0]})"
+                        for nm, t2 in T2_S.items())
+        print(f"  {br:14s} T_round {tr*1e3:5.1f} ms:  {line}")
+    tr_base = T.schedule_time_us(d, merge=False, rounds=1, k=1) * 1e-6
+    assert 2e-4 < tr_base / 50.0 < 3e-4   # ~2e-4, the prose number
+    print("\nthe memory line sits one to two orders below the floor;")
+    print("waiting is not the binding term.")
