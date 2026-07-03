@@ -1,19 +1,24 @@
-# remote-qec-scheduler
+# remote-lattice-surgery-qpu
 
-A scheduling and timing simulator for a modular trapped-ion quantum computer.
-It builds one full round of surface-code error correction, and a complete
-remote lattice-surgery merge across two modules, as an ordered list of physical
-operations on a segmented ion trap. Then it checks, at every code distance,
-that the schedule is legal. Ions cannot pass in their one-dimensional channels,
+The software of a modular trapped-ion QPU designed for remote lattice
+surgery. The scheduler builds one full round of surface-code error
+correction, and a complete remote lattice-surgery merge across two modules,
+as an ordered list of physical operations on a segmented ion trap. Then it
+checks, at every code distance, that the schedule is legal. Ions cannot pass in their one-dimensional channels,
 a well holds one ion except the pair merged for a gate, junctions are exclusive,
 and every gate fires in a well, never on a junction.
 
-This is the software behind Section 4.4 of the thesis *Trapped-Ion
-Multi-Computer Design for Remote Lattice Surgery* (Keio University, 2026).
-Every count and every claim in that section can be reproduced here.
+A timing layer prices the certified schedule in seconds from published
+demonstrations, and a requirement layer inverts the priced demand into the
+efficiency the design's ion--photon interface must deliver.
 
-**What it is not.** It moves ions, not quantum states. It proves the round can
-be scheduled without conflict. It returns no logical error rate.
+This is the software behind Sections 4.4 and 5.2 of the thesis *Trapped-Ion
+Multi-Computer Design for Remote Lattice Surgery* (Keio University, 2026).
+Every count and every claim in those sections can be reproduced here.
+
+**What it is not.** It moves ions, not quantum states. It proves the round
+can be scheduled without conflict, and prices it. It returns no logical
+error rate.
 
 ## Requirements
 
@@ -28,6 +33,7 @@ python3 qec_visualizer.py      # build the d=3 and d=5 HTML animations
 python3 qec_visualizer.py 7    # build the d=7 HTML animations
 python3 qec_visualizer.py all  # rebuild every odd d = 3..27 and print the sweep table
 python3 qec_timing.py          # price the schedule in seconds: durations, T_round, T_merge, demand rate
+python3 make_requirement.py    # invert the demand into the required interface efficiency
 ```
 
 The default run ends by certifying every odd distance up to 27, so the claim
@@ -40,6 +46,7 @@ in the thesis is exactly what the command shows. One distance at a time is
 |---|---|
 | `qec_scheduler.py` | The source of truth. Builds the distance-d rotated surface code, places every ion on the chip, emits the schedule (`round_ops`), packs it into parallel time-steps (`parallel_steps`), and runs the structural checks. `op_tally` counts every physical beat so a duration model can turn the schedule into a round time. |
 | `qec_timing.py` | Prices the certified schedule in seconds. Each packed step costs its slowest operation; per-beat durations are traced to published demonstrations and bracketed optimistic/baseline/conservative. Every round-time and demand-rate number in the thesis reprints from this file. |
+| `make_requirement.py` | Inverts the priced demand into the required ion--photon interface efficiency, in the mean and the 99%-delivery forms. Chain brackets mirror Table 5.1 of the thesis; the timing comes live from `qec_timing.py`. Every requirement number in thesis Section 5.2 reprints from this file. |
 | `qec_visualizer.py` | Renders the scheduler's operation list, unchanged, as an interactive HTML animation. It assigns pixel coordinates and nothing else. It also runs its own overlap check on every frame, written independently of the scheduler's checks, so two separate programs agree the motion is legal. |
 | `qec_round_sim_d{3,5,7}.html` | One local error-correction round at that distance. |
 | `qec_merge_full_sim_d{3,5,7}.html` | Two rounds of the remote lattice-surgery merge, the seam read by communication ions. The full d-round merge is packed and certified in the scheduler. |
@@ -50,8 +57,8 @@ Watch them in the browser, nothing to download:
 
 | | d = 3 | d = 5 | d = 7 |
 |---|---|---|---|
-| One local round | [round d3](https://hikaru7-7.github.io/remote-qec-scheduler/qec_round_sim_d3.html) | [round d5](https://hikaru7-7.github.io/remote-qec-scheduler/qec_round_sim_d5.html) | [round d7](https://hikaru7-7.github.io/remote-qec-scheduler/qec_round_sim_d7.html) |
-| Full merge | [merge d3](https://hikaru7-7.github.io/remote-qec-scheduler/qec_merge_full_sim_d3.html) | [merge d5](https://hikaru7-7.github.io/remote-qec-scheduler/qec_merge_full_sim_d5.html) | [merge d7](https://hikaru7-7.github.io/remote-qec-scheduler/qec_merge_full_sim_d7.html) |
+| One local round | [round d3](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d3.html) | [round d5](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d5.html) | [round d7](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d7.html) |
+| Full merge | [merge d3](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d3.html) | [merge d5](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d5.html) | [merge d7](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d7.html) |
 
 Or open any HTML file locally in a browser. No server needed. Use Prev / Next, the
 slider, or Play. Each frame shows a caption of the physical operation, the
@@ -121,9 +128,9 @@ for, and its frame-by-frame overlap test is an independent second check.
 ```bibtex
 @misc{Yokomori2026QECScheduler,
   author       = {Yokomori, Hikaru},
-  title        = {Remote-{QEC} feasibility scheduler},
+  title        = {remote-lattice-surgery-qpu: certified scheduling, timing, and interface requirements for a modular trapped-ion {QPU}},
   year         = {2026},
-  howpublished = {\url{https://github.com/Hikaru7-7/remote-qec-scheduler}},
+  howpublished = {\url{https://github.com/Hikaru7-7/remote-lattice-surgery-qpu}},
   note         = {Open-source software}
 }
 ```
