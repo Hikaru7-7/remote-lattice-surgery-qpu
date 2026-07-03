@@ -55,5 +55,41 @@ if __name__ == "__main__":
     print(f"\ndelivery probability at exactly pN=1: {1 - math.exp(-1):.3f}")
     print(f"expected empty windows per merge, d(d-1)(1-P): "
           f"{d*(d-1)*0.01:.2f} at P=0.99, {d*(d-1)*math.exp(-1):.1f} at pN=1")
+
+    # ---- 5.4: which delivery form binds -------------------------------
+    # A round fires when all d-1 active lanes hold a pair. Lanes that
+    # delivered keep theirs, so the round waits E[W] windows, the mean of
+    # the maximum of d-1 geometric variables with per-window success P.
+    def expected_windows(P, lanes):
+        return sum(1.0 - (1.0 - (1.0 - P) ** k) ** lanes for k in range(200))
+    for P, tag in ((1 - math.exp(-1), "mean form"), (0.99, "99% form")):
+        w = expected_windows(P, d - 1)
+        print(f"  {tag:9s} P={P:.3f}: E[windows per round] = {w:.2f} "
+              f"-> merge stretch x{w:.2f}")
+    assert 2.8 < expected_windows(1 - math.exp(-1), 6) < 3.1
+    assert expected_windows(0.99, 6) < 1.07
+
+    # ---- 5.4: the distilled operating point ----------------------------
+    # One round of double selection consumes three raw pairs and succeeds
+    # when both checks pass, roughly (1-eps)^2 at raw error eps. The rate
+    # demand scales by 3/P_ds and eta_int by its square root.
+    eps_raw = 0.06                       # baseline raw pair error (ch6)
+    p_ds = (1 - eps_raw) ** 2
+    factor = 3.0 / p_ds
+    eta99_base = 100 * required_eta_int(d, 1, ln100)[0]
+    print(f"\ndistilled point at baseline: P_ds ~ {p_ds:.2f}, "
+          f"demand x{factor:.1f}, eta_int x{math.sqrt(factor):.2f} "
+          f"-> {eta99_base*math.sqrt(factor):.1f}% (99% form)")
+    assert 8.0 < eta99_base * math.sqrt(factor) < 9.5
+
+    # ---- 5.4: the simple-distillation floor through the seam ----------
+    # Simple protocols floor near 10 p_loc (Campbell 2007; Krastanov 2019).
+    # With the six charged operations, the seam ratio against the bulk is
+    # (10+6)/10 = 1.6 at the 10x tolerance, (10+6)/14 at the matched cut.
+    for tol in (10.0, 14.0):
+        r = 16.0 / tol
+        print(f"  seam/bulk ratio after distillation at {tol:.0f}x: "
+              f"{r:.2f} -> logical factor {r**(d/2):.1f} at d={d}")
+
     print(f"free-space comparator (demonstrated 2.3% per arm incl. 71% APD): "
           f"eta_int equiv {0.023/0.71*100:.1f}%")
