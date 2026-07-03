@@ -123,6 +123,13 @@ is decided in `qec_scheduler.py` and certified there. The visualizer draws that
 list and adds nothing. It rejects any operation it does not have a renderer
 for, and its frame-by-frame overlap test is an independent second check.
 
+## Next layers
+
+The scheduler is certified and priced; it does not yet carry quantum
+errors. The next layer planned here is error injection on the certified
+schedule (STIM + pymatching), so the seam tolerance of remote lattice
+surgery is measured on this chip rather than cited from the literature.
+
 ## Cite
 
 ```bibtex
