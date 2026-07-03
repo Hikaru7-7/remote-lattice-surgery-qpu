@@ -63,3 +63,14 @@ if __name__ == "__main__":
         print(f"  p_loc = {p:.0e}  ({name}):  V >= {100*v:.1f}%")
     assert abs((1 - 2*share*1e-3) - 0.992) < 1e-12
     assert abs((1 - 2*share*3e-3) - 0.976) < 1e-12
+
+    # chain fidelity charges at the demonstrated link (O'Reilly et al. 2024,
+    # PRL 133, 090802): polarization mixing dominated the pair error;
+    # temporal mismatch and dark counts were bundled at 0.4%. Cited in 5.1.
+    mixing, temporal_dark = 0.029, 0.004
+    print(f"\nchain charges at the demonstrated link: "
+          f"mixing {mixing:.1%}, temporal+dark {temporal_dark:.1%}")
+    print(f"together {mixing+temporal_dark:.1%} vs the {share*1e-3:.1%} floor:")
+    print("the demonstrated chain alone overspends the tight floor, so the")
+    print("interface must beat demonstrated polarization handling, or the")
+    print("link must distill (Section 5.4).")
