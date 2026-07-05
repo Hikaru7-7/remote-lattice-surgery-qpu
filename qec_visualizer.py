@@ -84,8 +84,11 @@ def is_right_boundary(s):
 
 
 def base_ions(merge):
-    """Ion table + home positions. In merge mode add one comm ion per lane,
-    active lanes 0..d-2 (one per seam check) and the bottom lane held spare."""
+    """Ion table + home positions. In merge mode each active lane runs TWO comm
+    ions in ping-pong (Section 4.2): "C%d" networks at the cavity, "C%dB" is the
+    carrier that lives at the gate-end swap well and ferries the delivered pair.
+    Active lanes are 0..d-2 (one per seam check); the bottom lane is held spare
+    with a single ion."""
     ions, home = {}, {}
     for n in range(1, D * D + 1):
         ions["d%d" % n] = ["d%d" % n, "data"]
@@ -94,9 +97,13 @@ def base_ions(merge):
         ions[LABEL[s]] = [LABEL[s], "X" if KIND[s] == "X" else "Z"]
         home[LABEL[s]] = [X(ACOL[s]), CY[CELL[s]]]
     if merge:
+        swapx = X(D - 0.5) + 30                          # gate-end swap well, clear of the ancilla columns
         for r in range(D):
             ions["C%d" % r] = ["C%d" % r, "comm" if r in SEAM else "spare"]
-            home["C%d" % r] = [XIF, CY[r]]
+            home["C%d" % r] = [XIF, CY[r]]                # networker at the cavity
+            if r in SEAM:                                # active lane: a carrier too
+                ions["C%dB" % r] = ["C%dB" % r, "comm"]
+                home["C%dB" % r] = [swapx, CY[r]]
     return ions, home
 
 
@@ -138,9 +145,16 @@ def build(merge=False, rounds=1, d=3):
     # --- translate scheduler identifiers to visualizer ion ids -------------
     def A(s):   return LABEL[s]                       # ancilla stab -> label
     def Dt(rc): return ID_OF_DATA[rc]                 # data (r,c) -> "dN"
-    def C(l):   return "C%d" % l                      # lane index -> comm ion id
     cx = X(D - 1)
+    swapx = X(D - 0.5) + 30                            # gate-end swap well, clear of ancilla columns
     spam_shift = 40                                   # ancillas step this far right into the SPAM zone, clear of data and park wells
+    # ping-pong role pointers: net[l] is the ion at the cavity (networks this
+    # round), car[l] is the carrier at the swap well (ferries this round). They
+    # swap at every comm_swap. C(l) below returns the current carrier, since the
+    # carrier is the ion the seam-gate excursion moves.
+    net = {l: "C%d" % l for l in (SEAM or [])}
+    car = {l: "C%dB" % l for l in (SEAM or [])}
+    def C(l):   return car[l]                          # excursion moves the carrier
 
     # --- one handler per operation the scheduler emits.  The sequence, the
     #     batching, and the beats all come from round_ops; this only places them.
@@ -149,7 +163,7 @@ def build(merge=False, rounds=1, d=3):
         v = op[0]
         if v == "prep":
             snap(f"Start of the {'merge' if op[1] else 'round'}: data and ancillas in memory wells, ancillas in their basis."
-                 + (" Comm ions wait at the cavities." if op[1] else ""))
+                 + (" Each active lane has a networker at its cavity and a carrier at its gate-end swap well." if op[1] else ""))
         elif v == "round":
             snap(f"Round {op[1] + 1} of {op[2]}.", badge=f"round {op[1] + 1}")
         elif v == "park":
@@ -214,11 +228,11 @@ def build(merge=False, rounds=1, d=3):
             snap(f"Step {L}: they drop back to the wells they lifted from.", hi=[A(s) for s, *_ in op[2]])
         elif v == "comm_out":
             L = op[1] + 1; lanes = op[2]; mode = op[3]
-            tgt = (XIF + (cx if mode == "same" else JX(D - 1))) / 2
-            for l in lanes:
+            tgt = (swapx + cx) / 2                        # clear of the boundary data until the gate merges
+            for l in lanes:                              # short hop: swap well -> toward the seam gate
                 setp(C(l), tgt, CY[l])
-            snap(f"Step {L}: comm ions shuttle out through the SPAM zone"
-                 + (" to their same-cell boundary data." if mode == "same" else " toward their junctions."),
+            snap(f"Step {L}: the carriers step from the swap well toward their boundary data"
+                 + ("." if mode == "same" else ", heading for their junctions."),
                  hi=[C(l) for l in lanes])
         elif v == "comm_lift":
             L = op[1] + 1
@@ -242,19 +256,20 @@ def build(merge=False, rounds=1, d=3):
                  junc=[(D - 1, l) for l in op[2]])
         elif v == "comm_back":
             L = op[1] + 1; lanes = op[2]; mode = op[3]
-            tgt = (XIF + (cx if mode == "same" else JX(D - 1))) / 2
             for l in lanes:
                 if mode == "same":
                     setp(Dt((l, D - 1)), cx, CY[l])
-                setp(C(l), tgt, CY[l])
-            snap(f"Step {L}: they shuttle back through the SPAM zone.", hi=[C(l) for l in lanes])
+                setp(C(l), swapx, CY[l])                 # carrier back to the swap well
+            snap(f"Step {L}: the carriers step back to their swap wells.", hi=[C(l) for l in lanes])
         elif v == "comm_arrive":
             L = op[1] + 1
             for l in op[2]:
-                setp(C(l), XIF, CY[l])
-            snap(f"Step {L}: they are back at their cavities.", hi=[C(l) for l in op[2]])
+                setp(C(l), swapx, CY[l])                 # carrier waits at the swap well
+            snap(f"Step {L}: the carriers are back at the gate-end swap wells.",
+                 hi=[C(l) for l in op[2]])
         elif v == "measure":
-            snap("The comm ions are measured at their cavities; this round's Bell pairs reach module B.",
+            snap("The carrier ions are measured; this round's Bell pairs reach module B. "
+                 "The networkers keep attempting at the cavities.",
                  hi=[C(l) for l in op[1]], badge=f"{len(op[1])} pairs -> B")
         elif v == "readout":
             swap_pairs([(A(s), Dt(rc)) for s, rc in op[1]], "Readout bubble: an ancilla and its neighbour data")
@@ -278,14 +293,29 @@ def build(merge=False, rounds=1, d=3):
                    "Ancillas are reset and back in their memory wells. The schedule ends where it began.")
             snap(txt, hi=[LABEL[s] for s in STABS if not (merge and is_right_boundary(s))])
         elif v == "herald":
-            snap("The comm ions herald a fresh Bell pair at their cavities.", hi=[C(l) for l in op[1]])
+            snap("The networker ions herald a fresh Bell pair at their cavities.",
+                 hi=[net[l] for l in op[1]])
         elif v == "comm_swap":
-            # ping-pong handoff: the two comm ions of each lane exchange roles
-            # by a crystal rotation at the gate-end swap well. One glyph per
-            # lane is drawn, so the exchange is shown as a badge, not a move.
-            snap("Ping-pong: the two comm ions of each lane trade roles at the "
-                 "gate-end swap well; the networker and the carrier exchange.",
-                 hi=[C(l) for l in op[1]], badge="swap roles")
+            # ping-pong handoff at the gate-end swap well. The networker that just
+            # heralded carries its fresh pair over to the swap well, meets the
+            # emptied carrier there, and the two crystal-rotate to pass: the fresh
+            # ion stays to deliver next round (new carrier), the emptied ion goes
+            # to the cavity (new networker). Then the role pointers flip.
+            lanes = op[1]
+            for l in lanes:                              # networker travels to the swap well
+                setp(net[l], swapx - 34, CY[l])          # just beside the emptied carrier
+            snap("Ping-pong handoff: each networker carries its fresh pair from the "
+                 "cavity to the gate-end swap well, beside the emptied carrier.",
+                 hi=[net[l] for l in lanes], badge="ping-pong")
+            swap_pairs([(net[l], car[l]) for l in lanes],
+                       "At the swap well the two comm ions")
+            for l in lanes:                              # emptied ion returns to the cavity
+                setp(car[l], XIF, CY[l])                 # (car[l] is still the OLD carrier here)
+            snap("The emptied ion returns to the cavity to network the next round; "
+                 "the fresh-pair ion stays as the new carrier.",
+                 hi=[car[l] for l in lanes])
+            for l in lanes:                              # flip roles for the next round
+                net[l], car[l] = car[l], net[l]
         else:
             # the contract: every operation the scheduler emits must be rendered
             raise ValueError(f"no renderer for scheduler op {v!r}")
