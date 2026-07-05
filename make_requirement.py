@@ -52,6 +52,20 @@ if __name__ == "__main__":
         e1, p1, n = required_eta_int(d, k, 1.0)
         e2, _, _ = required_eta_int(d, k, ln100)
         print(f"  {BRACKETS[k]:14s} {n:9.0f} {p1:12.3e} {100*e1:13.2f}% {100*e2:12.2f}%")
+
+    # ---- 5.2 (link level): the per-attempt demand, both forms ----------
+    # This is the demand BEFORE the chain is split off, the closing numbers
+    # of thesis Section 5.2 and the per-attempt row of Table 5.4.
+    print("\nper-attempt success demand p at the link (no chain split):")
+    WANT_P99 = (2.5e-4, 3.3e-4, 9.7e-4)          # thesis quotes, 2 digits
+    for k in range(3):
+        _, p_mean, n = required_eta_int(d, k, 1.0)
+        _, p_99, _ = required_eta_int(d, k, ln100)
+        print(f"  {BRACKETS[k]:14s} N={n:6.0f}  mean {p_mean:.2e}  "
+              f"99% form {p_99:.2e}")
+        assert abs(p_99 - WANT_P99[k]) / WANT_P99[k] < 0.05, (k, p_99)
+    assert abs(required_eta_int(d, 1, 1.0)[1] - 7.2e-5) / 7.2e-5 < 0.02
+
     print(f"\ndelivery probability at exactly pN=1: {1 - math.exp(-1):.3f}")
     print(f"expected empty windows per merge, d(d-1)(1-P): "
           f"{d*(d-1)*0.01:.2f} at P=0.99, {d*(d-1)*math.exp(-1):.1f} at pN=1")
@@ -69,7 +83,7 @@ if __name__ == "__main__":
     assert 2.8 < expected_windows(1 - math.exp(-1), 6) < 3.1
     assert expected_windows(0.99, 6) < 1.07
 
-    # ---- 5.4: the distilled operating point ----------------------------
+    # ---- ch7 (discussion): the distilled operating point ---------------
     # One round of double selection consumes three raw pairs and succeeds
     # when both checks pass, roughly (1-eps)^2 at raw error eps. The rate
     # demand scales by 3/P_ds and eta_int by its square root.
@@ -80,14 +94,33 @@ if __name__ == "__main__":
     print(f"\ndistilled point at baseline: P_ds ~ {p_ds:.2f}, "
           f"demand x{factor:.1f}, eta_int x{math.sqrt(factor):.2f} "
           f"-> {eta99_base*math.sqrt(factor):.1f}% (99% form)")
-    assert 8.0 < eta99_base * math.sqrt(factor) < 9.5
+    assert 7.5 < eta99_base * math.sqrt(factor) < 9.5
 
-    # ---- 5.4: the simple-distillation floor through the seam ----------
+    # ---- ch7: distillation-based estimation (Distimation) --------------
+    # The accept/reject statistics of double selection estimate the pair
+    # error for free: P_acc ~ (1-eps)^2, so an estimator from n triples has
+    # d_eps = sqrt(P(1-P)/n) / |dP/deps|, |dP/deps| = 2(1-eps).
+    # (Yokomori et al., IEEE QCE 2025, arXiv:2504.18141)
+    eps_b = 0.06
+    P_acc = (1 - eps_b) ** 2
+    dPde = 2 * (1 - eps_b)
+    triples_s = T.demand_rate_per_s(7, 1) / 3.0   # baseline link rate / 3
+    n_1e3 = P_acc * (1 - P_acc) / (1e-3 * dPde) ** 2
+    t_1e3 = n_1e3 / triples_s
+    print(f"\nDistimation: P_acc {P_acc:.3f}, {triples_s:.0f} triples/s ->")
+    print(f"  pair error pinned to +-1e-3 in {n_1e3:.0f} triples "
+          f"= {t_1e3:.0f} s of baseline operation")
+    assert 25000 < n_1e3 < 33000 and 140 < t_1e3 < 210
+
+    # ---- ch7 (discussion): the simple-distillation floor ---------------
     # Simple protocols floor near 10 p_loc (Campbell 2007; Krastanov 2019).
-    # With the six charged operations, the seam ratio against the bulk is
-    # (10+6)/10 = 1.6 at the 10x tolerance, (10+6)/14 at the matched cut.
+    # With the charged operations (make_fidelity.COMM_OPS), the seam ratio
+    # against the bulk is (10 + COMM_OPS)/tol; COMM_OPS imported so the two
+    # layers cannot drift (they used to hardcode 6/16 independently).
+    import make_fidelity as MF
+    seam_total = MF.MULTIPLIER + MF.COMM_OPS         # 10 + 8 = 18
     for tol in (10.0, 14.0):
-        r = 16.0 / tol
+        r = seam_total / tol
         print(f"  seam/bulk ratio after distillation at {tol:.0f}x: "
               f"{r:.2f} -> logical factor {r**(d/2):.1f} at d={d}")
 

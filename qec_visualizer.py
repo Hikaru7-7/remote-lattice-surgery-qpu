@@ -279,6 +279,13 @@ def build(merge=False, rounds=1, d=3):
             snap(txt, hi=[LABEL[s] for s in STABS if not (merge and is_right_boundary(s))])
         elif v == "herald":
             snap("The comm ions herald a fresh Bell pair at their cavities.", hi=[C(l) for l in op[1]])
+        elif v == "comm_swap":
+            # ping-pong handoff: the two comm ions of each lane exchange roles
+            # by a crystal rotation at the gate-end swap well. One glyph per
+            # lane is drawn, so the exchange is shown as a badge, not a move.
+            snap("Ping-pong: the two comm ions of each lane trade roles at the "
+                 "gate-end swap well; the networker and the carrier exchange.",
+                 hi=[C(l) for l in op[1]], badge="swap roles")
         else:
             # the contract: every operation the scheduler emits must be rendered
             raise ValueError(f"no renderer for scheduler op {v!r}")

@@ -251,6 +251,14 @@ def n_seam_checks(d: int, r: int) -> int:
     return (1 if r >= 1 else 0) + (1 if r <= d - 2 else 0)
 
 
+def check_spam_capacity(d: int) -> None:
+    """Check: no cell carries more ancillas than its SPAM zone has sites.
+    Chapter 4 gives the SPAM zone up to d detection sites per cell."""
+    for i, cell in enumerate(place(d)):
+        n = sum(1 for k, _ in cell if k == 'anc')
+        assert n <= d, f"d={d} cell {i}: {n} ancillas > {d} SPAM sites"
+
+
 def check_seam_fits(d: int) -> None:
     """Check: each seam qubit's seam gates fit in the steps its bulk gates leave
     free, so the seam extraction rides in the same 4-step round, no extra phases."""
@@ -311,28 +319,48 @@ def check_merge_demand(d: int, lanes: int = None) -> tuple:
 # be measured, teleporting the half-parity to the other module. A merge uses d-1 comm
 # ions, one per seam check, and holds one lane spare. No junction sits in the I/F zone.
 def comm_ions(d: int) -> dict:
-    """One communication ion per lane, d in all, each in the I/F zone of its cell."""
-    return {r: {"cell": r, "zone": "IF"} for r in range(d)}
+    """d communication LANES, one per cell in the I/F zone; each lane carries
+    comm_ions_per_lane() Ba+ ions (two, ping-pong). The lane is the unit the seam
+    schedule addresses; the two ions time-share it (see comm_ions_per_lane)."""
+    return {r: {"cell": r, "zone": "IF", "ions": comm_ions_per_lane()} for r in range(d)}
 
 
 def check_comm_ions(d: int) -> None:
-    """Check: d comm ions, one per cell in the I/F zone, and a merge round uses
-    d-1 of them (seam check s uses cell s's comm ion) with one lane spare."""
+    """Check: d comm lanes, one per cell in the I/F zone, two Ba+ ions each
+    (ping-pong), and a merge round uses d-1 lanes (seam check s uses cell s's
+    lane) with one lane spare."""
     ci = comm_ions(d)
-    assert len(ci) == d, f"d={d}: {len(ci)} comm ions, want {d}"
-    assert all(v["zone"] == "IF" for v in ci.values()), "a comm ion is not in the I/F zone"
-    used = set(range(d - 1))                          # seam check s -> cell s's comm ion
+    assert len(ci) == d, f"d={d}: {len(ci)} comm lanes, want {d}"
+    assert all(v["zone"] == "IF" for v in ci.values()), "a comm lane is not in the I/F zone"
+    assert all(v["ions"] == 2 for v in ci.values()), "a comm lane is not two-ion (ping-pong)"
+    used = set(range(d - 1))                          # seam check s -> cell s's lane
     assert len(used) == d - 1 and d - len(used) == 1, "not d-1 used with one spare"
+    # one ping-pong reorder step per merge round, covering all d-1 active lanes
+    m = round_ops(d, merge=True, rounds=1)
+    sw = [op for op in m if op[0] == "comm_swap"]
+    assert len(sw) == 1 and len(sw[0][1]) == d - 1, \
+        f"d={d}: comm swap not one step over {d-1} active lanes"
+    # over a full d-round merge, one reorder per round: the two ions return to
+    # their starting roles after an even number of rounds (alternation closes)
+    full = round_ops(d, merge=True, rounds=d)
+    assert sum(1 for op in full if op[0] == "comm_swap") == d, \
+        f"d={d}: want d ping-pong reorders across the merge"
 
 
 def comm_ions_per_lane() -> int:
-    """One communication ion per lane. It cycles herald, deliver, measure, re-herald:
-    it heralds a Bell pair at the cavity, makes its excursion to gate the two boundary
-    data and is measured, then re-heralds for the next round. The cavity idles during
-    the excursion. Hiding that idle behind a herald pool of two or more ions (which
-    would need a gate-zone reorder junction, never one in the I/F) is a Chapter 5
-    throughput question, not a structural one, so the baseline is a single ion."""
-    return 1
+    """Two communication ions per lane, ping-pong. One networks the full round at
+    the cavity while the other carries the previous round's heralded half to the
+    seam gate; each round they exchange roles. The exchange is a crystal-rotation
+    reorder in a dedicated swap well at the interface-facing FAR END of the gate
+    zone (one well beyond the seam column d-1), NOT in the I/F zone: a motional
+    reorder belongs in the gate zone, and this keeps the delicate cavity and its
+    optical access untouched. Resolves the throughput question the single-ion
+    baseline deferred -- with one ion the cavity idled ~40% of each merge round
+    while the ion gated and was measured, shrinking the attempt window; two ions
+    keep one ion networking the whole round (thesis Section 4.2, Section 5.2).
+    The reorder charges the pair one extra local operation per module, so the
+    seam-check op count is eight, not six (make_fidelity.COMM_OPS)."""
+    return 2
 
 
 def bulk_junction_use(d: int) -> set:
@@ -494,6 +522,7 @@ BEATS = {                                              # sub-beats each operatio
     "measure": ["read"], "readout": ["merge", "rotate", "split"], "syndromes": ["read"],
     "to_spam": ["shuttle-to-SPAM"], "from_spam": ["shuttle-from-SPAM"],
     "reset": ["merge", "rotate", "split"], "reset_done": ["settle"], "herald": ["herald"],
+    "comm_swap": ["merge", "rotate", "split"],   # ping-pong reorder, gate-end swap well
     "unpark": ["shuttle-from-park", "junction-ascent", "shuttle-home"], "round": [],
 }
 
@@ -598,6 +627,11 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
                             ("comm_arrive", step, crss)]
         if merge:
             ops.append(("measure", lanes))
+            # ping-pong handoff: the networker and carrier exchange roles at the
+            # gate-end swap well (one crystal-rotation reorder per active lane).
+            # Off the bulk critical path (it runs in the comm lane's shadow), so
+            # it lands in T_merge, not in the local round window of Section 5.2.
+            ops.append(("comm_swap", lanes))
         layers = readout_swaps(d, exclude)
         ops += [("readout", layer) for layer in layers]
         read = [it for cl in place(d) for k, it in cl if k == "anc" and it not in exclude]
@@ -1056,7 +1090,9 @@ if __name__ == "__main__":
         print("does the seam extraction fit in the same round?")
         for d in (3, 5, 7, 9, 11, 15):
             check_seam_fits(d)
+            check_spam_capacity(d)
         print("  seam fits ........... PASS  (d = 3,5,7,9,11,15)")
+        print("  SPAM capacity ....... PASS  (max ancillas per cell <= d)")
         print("  seam qubit schedule (d=3), bulk vs seam by row:")
         for r in range(3):
             b = sorted(bulk_steps_at(3, r))
