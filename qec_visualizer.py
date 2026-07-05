@@ -380,6 +380,8 @@ DATA.celly.forEach((y,ci)=>{gZ.appendChild(E("rect",{x:DATA.xlo,y:y-24,width:W-D
  const t=E("text",{x:DATA.xlo+5,y:y-31,"font-size":11,fill:"var(--mut)"});t.textContent="cell "+ci;gZ.appendChild(t);});
 if(DATA.xif){const t=E("text",{x:DATA.xif-6,y:DATA.celly[0]-31,"font-size":11,fill:"var(--mut)"});t.textContent="interface (cavities)";gZ.appendChild(t);
  DATA.celly.forEach((y,ci)=>gZ.appendChild(E("path",{d:"M "+(DATA.xif+30)+" "+(y-14)+" A 17 17 0 0 1 "+(DATA.xif+30)+" "+(y+14),fill:"none",stroke:"var(--teal)","stroke-width":2,opacity:.55})));}
+if(DATA.swapx){const t=E("text",{x:DATA.swapx-10,y:DATA.swaprows[0]-31,"font-size":11,fill:"var(--mut)"});t.textContent="gate-end swap wells";gZ.appendChild(t);
+ DATA.swaprows.forEach(y=>gZ.appendChild(E("rect",{x:DATA.swapx-16,y:y-16,width:32,height:32,rx:9,fill:"none",stroke:"var(--purple)","stroke-width":1.6,"stroke-dasharray":"4 3",opacity:.7})));}
 (DATA.wells||[]).forEach(w=>{gWell.appendChild(E("rect",{x:w[0]-22,y:w[1]-19,width:44,height:38,rx:10,fill:"var(--panel)",stroke:"var(--line)","stroke-width":1.2}));});
 const jel={};DATA.junctions.forEach(j=>{const lane=E("line",{x1:j.x,y1:j.y1+24,x2:j.x,y2:j.y2-24,stroke:"var(--line)","stroke-width":2.5,opacity:.5,"stroke-linecap":"round"});
  gJ.appendChild(lane);gJ.appendChild(E("circle",{cx:j.x,cy:j.y1+24,r:3.4,fill:"var(--mut)"}));gJ.appendChild(E("circle",{cx:j.x,cy:j.y2-24,r:3.4,fill:"var(--mut)"}));jel[j.c+"_"+j.b]=lane;});
@@ -432,7 +434,12 @@ def write_html(path, merge, rounds, d=3):
                           for c in range(D) for b in range(D - 1)],
             "wells": wells + park, "nsteps": len(parallel_steps(D, merge, rounds)),
             "xlo": X(-0.5) - 45,
-            "xhi": (XIF + 70) if merge else (X(D - 0.5) + 60), "xif": XIF if merge else 0}
+            "xhi": (XIF + 70) if merge else (X(D - 0.5) + 60), "xif": XIF if merge else 0,
+            # gate-end swap wells: one per active lane (rows 0..d-2), the ping-pong
+            # reorder well of Section 4.2. Drawn so the second comm ion and its well
+            # are visible, not just implied.
+            "swapx": (X(D - 0.5) + 30) if merge else 0,
+            "swaprows": [CY[r] for r in range(D - 1)] if merge else []}
     title = (f"Distance-{D} remote merge, {rounds} rounds, one comm ion per lane"
              if merge else f"Distance-{D} error-correction round")
     sub = (f"{rounds} full merge rounds. One comm ion per lane cycles herald, deliver, measure, re-herald; "

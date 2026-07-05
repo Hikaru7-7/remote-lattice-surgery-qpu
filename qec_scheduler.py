@@ -311,18 +311,56 @@ def check_merge_demand(d: int, lanes: int = None) -> tuple:
 
 
 # --- COMMUNICATION IONS  (the remote leg of each seam check) ----------------
-# Each lane has one communication ion in the I/F zone at the far end of its cell,
-# holding a heralded Bell pair. There is no separate seam ancilla: the comm ion
-# itself makes the excursion. It shuttles out of its cavity through the SPAM zone to
-# gate its same-cell boundary data (row s), then crosses the gate-zone junction at
-# column d-1 into the next cell to gate its cross-cell data (row s+1), and returns to
-# be measured, teleporting the half-parity to the other module. A merge uses d-1 comm
-# ions, one per seam check, and holds one lane spare. No junction sits in the I/F zone.
+# Each lane runs TWO communication ions in ping-pong (Section 4.2). At any moment
+# one, the NETWORKER, sits at the cavity in the I/F zone at the far end of the cell
+# and attempts entanglement for the whole round; the other, the CARRIER, waits at a
+# swap well at the interface-facing end of the GATE zone (one well beyond the seam
+# column d-1) holding the previous round's heralded half. There is no separate seam
+# ancilla: the carrier makes the seam excursion. It steps the short distance from the
+# swap well to gate its same-cell boundary data (row s), crosses the gate-zone
+# junction at column d-1 into the next cell to gate its cross-cell data (row s+1), and
+# returns to the swap well to be measured, teleporting the half-parity to the other
+# module. Each round the two ions exchange roles by a crystal rotation at the swap
+# well (comm_swap): the networker that just heralded carries its fresh pair over and
+# the emptied carrier returns to the cavity. A merge uses d-1 lanes, one per seam
+# check, and holds one lane spare. No junction sits in the I/F zone; the reorder well
+# is in the gate zone, which is built for rotations and away from the cavity.
 def comm_ions(d: int) -> dict:
     """d communication LANES, one per cell in the I/F zone; each lane carries
     comm_ions_per_lane() Ba+ ions (two, ping-pong). The lane is the unit the seam
     schedule addresses; the two ions time-share it (see comm_ions_per_lane)."""
     return {r: {"cell": r, "zone": "IF", "ions": comm_ions_per_lane()} for r in range(d)}
+
+
+def comm_wells(d: int) -> dict:
+    """The two wells each active comm lane (0..d-2) owns for the ping-pong.
+      "cavity": in the I/F zone at the far (photonic-edge) end of the cell, where
+                the networker sits and attempts.
+      "swap":   at the interface-facing end of the GATE zone, one well beyond the
+                seam column d-1, where the carrier waits and the two ions rotate to
+                exchange roles. A gate-zone well (a motional reorder belongs in the
+                gate zone, not beside the cavity), distinct from every data column
+                0..d-1, the seam column d-1, and the boundary junction column."""
+    return {s: {"cavity": ("IF", s), "swap": ("gate-end", s)} for s in range(d - 1)}
+
+
+def check_comm_pingpong(d: int) -> None:
+    """Check the two-ion ping-pong is structurally sound: each active lane owns two
+    Ba+ ions and two distinct wells; the swap well is a gate-zone well, off every
+    code column and the boundary junction; one reorder fires per merge round. The
+    two ions are identical Ba+, so the end configuration after any number of rounds
+    (one at the cavity, one at the swap well) equals the start up to relabelling."""
+    wells = comm_wells(d)
+    assert len(wells) == d - 1, f"d={d}: {len(wells)} active comm lanes, want {d-1}"
+    for s, w in wells.items():
+        assert w["cavity"] != w["swap"], f"d={d} lane {s}: cavity and swap coincide"
+        assert w["cavity"][0] == "IF" and w["swap"][0] == "gate-end", \
+            f"d={d} lane {s}: wells not in their zones"
+    assert all(v["ions"] == 2 for k, v in comm_ions(d).items() if k < d - 1), \
+        f"d={d}: an active lane is not two-ion"
+    full = round_ops(d, merge=True, rounds=d)
+    assert sum(1 for op in full if op[0] == "comm_swap") == d, \
+        f"d={d}: want one ping-pong reorder per merge round"
 
 
 def check_comm_ions(d: int) -> None:
@@ -510,19 +548,25 @@ def bottom_park_wells(d: int) -> int:
 # A cross-row gate lifts through the junction beside it, gates, and returns. It
 # first swaps onto the target column ONLY when a data ion sits between its well
 # and the junction mouth; the junction-adjacent half of the crossings lift
-# directly. A comm ion delivers by shuttling out through the SPAM zone,
-# gating, and shuttling back. round_ops emits this list; the visualizer only
-# assigns coordinates to it, so the animation and the schedule are the same object.
+# directly. In the two-ion ping-pong the CARRIER, waiting at the gate-end swap
+# well, makes only a SHORT hop to gate its adjacent boundary data and back; the
+# long interface->gate trip is the NETWORKER's handoff, charged inside comm_swap
+# (shuttle-handoff + the crystal rotation). round_ops emits this list; the
+# visualizer only assigns coordinates to it, so the animation and the schedule
+# are the same object.
 BEATS = {                                              # sub-beats each operation takes
     "prep": ["settle"], "park": ["shuttle-to-junction", "junction-descent", "shuttle-to-park"],
     "inrow": ["merge+gate", "split"], "swap": ["merge", "rotate", "split"],
     "xlift": ["lift"], "xgate": ["merge+gate"], "xlower": ["lift"], "xdrop": ["drop"],
-    "comm_out": ["shuttle-through-SPAM"], "comm_lift": ["lift"], "comm_gate": ["merge+gate"],
-    "comm_lower": ["lift"], "comm_back": ["shuttle-through-SPAM"], "comm_arrive": ["settle"],
+    "comm_out": ["shuttle-carrier-hop"], "comm_lift": ["lift"], "comm_gate": ["merge+gate"],
+    "comm_lower": ["lift"], "comm_back": ["shuttle-carrier-hop"], "comm_arrive": ["settle"],
     "measure": ["read"], "readout": ["merge", "rotate", "split"], "syndromes": ["read"],
     "to_spam": ["shuttle-to-SPAM"], "from_spam": ["shuttle-from-SPAM"],
     "reset": ["merge", "rotate", "split"], "reset_done": ["settle"], "herald": ["herald"],
-    "comm_swap": ["merge", "rotate", "split"],   # ping-pong reorder, gate-end swap well
+    # ping-pong handoff: the networker carries its fresh pair from the cavity to
+    # the gate-end swap well (shuttle-handoff, the interface->gate distance), then
+    # the two ions crystal-rotate to exchange roles.
+    "comm_swap": ["shuttle-handoff", "merge", "rotate", "split"],
     "unpark": ["shuttle-from-park", "junction-ascent", "shuttle-home"], "round": [],
 }
 
@@ -684,7 +728,7 @@ def check_round_ops(d: int) -> None:
 # times are plugged in. The tally counts the beat once; Chapter 5 doubles its time.
 BEAT_KIND = {
     "merge+gate": "gate", "rotate": "swap_rotation", "merge": "merge_split", "split": "merge_split",
-    "shuttle-through-SPAM": "shuttle", "drop": "shuttle", "settle": "shuttle",
+    "shuttle-carrier-hop": "shuttle", "shuttle-handoff": "shuttle", "drop": "shuttle", "settle": "shuttle",
     "shuttle-to-junction": "shuttle", "shuttle-to-park": "shuttle", "shuttle-from-park": "shuttle",
     "shuttle-to-SPAM": "shuttle", "shuttle-from-SPAM": "shuttle",
     "shuttle-home": "shuttle", "junction-descent": "junction", "junction-ascent": "junction",
@@ -1017,8 +1061,8 @@ def certify(d: int) -> int:
     assert isinstance(d, int) and d >= 3 and d % 2 == 1, "d must be an odd integer >= 3"
     checks = [check_census, check_no_double_touch, check_placement, check_junctions,
               check_gate_zone, check_parallel_crossings, check_seam_fits, check_seam_census,
-              check_merge_demand, check_comm_ions, check_seam_schedule, check_merge_no_crowding,
-              check_lane_clearing, check_round_ops, check_ends_at_rest]
+              check_merge_demand, check_comm_ions, check_comm_pingpong, check_seam_schedule,
+              check_merge_no_crowding, check_lane_clearing, check_round_ops, check_ends_at_rest]
     for chk in checks:
         chk(d)
     if d == 3:
@@ -1106,8 +1150,10 @@ if __name__ == "__main__":
             dem, lanes, tot = check_merge_demand(d)
             print(f"    d={d}: {dem} pairs/round, {lanes} lanes ({lanes - dem} spare), {tot} per {d}-round merge")
         for d in (3, 5, 7, 9, 11, 15):
-            check_comm_ions(d); check_seam_schedule(d)
-        print("  comm ions ........... PASS  (d in the I/F zone, d-1 used + 1 spare)")
+            check_comm_ions(d); check_comm_pingpong(d); check_seam_schedule(d)
+        print("  comm ions ........... PASS  (d lanes in the I/F zone, d-1 used + 1 spare)")
+        print("  comm ping-pong ...... PASS  (2 Ba+/active lane: networker at cavity,")
+        print("                                carrier at gate-end swap well, 1 reorder/round)")
         print("  seam schedule ....... PASS  (seam + comm gates ride in the 4 steps)")
         print("  seam schedule (d=3), each seam check by step:")
         for si, g in seam_schedule(3).items():
@@ -1137,7 +1183,9 @@ if __name__ == "__main__":
                 rounds = dd if rr is None else rr
                 t = op_tally(dd, mg, rounds); ps = len(parallel_steps(dd, mg, rounds))
                 print(f"  d={dd} {lbl}: {t['total_beats']:3d} serial beats -> {ps:2d} parallel time-steps")
-        print(f"  comm-ion count ...... note: {comm_ions_per_lane()} per lane, cycling herald/deliver/measure/re-herald (a herald pool is a Ch5 option)")
+        print(f"  comm-ion count ...... {comm_ions_per_lane()} per active lane (ping-pong): one networks the")
+        print(f"                        cavity the whole round, one carries the delivered pair; they")
+        print(f"                        reorder at the gate-end swap well each round (Section 4.2)")
         for d in (3, 5, 7):
             print(f"    d={d}: cells stay {per_cell_ancillas(d)} (max {d}); a new seam ancilla per check would force max {netnew_busiest(d)}; blocked lanes {blocked_lanes(d)} clear to spare/routing")
         for dd in range(3, 29, 2):                     # the thesis claim, end to end
