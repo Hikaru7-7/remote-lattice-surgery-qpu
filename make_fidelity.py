@@ -103,6 +103,18 @@ if __name__ == "__main__":
         print(f"  p_loc = {p:.0e}  ({name}):  V >= {100*vd:.1f}%")
     assert abs((1 - 2*MULTIPLIER*1e-3) - 0.98) < 1e-12   # the 98% distilled operating floor
 
+    # The mismatch bound (Section 7.2). The circuit-level injection runs on the
+    # abstract code, so the physical schedule's transport and idle steps are
+    # unpriced there. Fold them into an effective local error
+    # p_eff = p_loc + Delta. The distilled operating floor keeps its 98% while
+    # p_eff <= 1e-3, and the priced idle share sits a factor of a few below.
+    p_eff_max = (1 - 0.98) / (2 * MULTIPLIER)
+    print("\nmismatch bound, p_eff = p_loc + Delta (schedule steps the abstract code omits):")
+    print(f"  98% operating floor holds while p_eff <= {p_eff_max:.0e}")
+    print(f"  priced idle at baseline {e_idle_base:.1e}  = {100*e_idle_base/p_eff_max:.0f}% of the ceiling")
+    print(f"  headroom over the priced idle charge: x{p_eff_max/e_idle_base:.1f}")
+    assert abs(p_eff_max - 1e-3) < 1e-12
+
     # chain fidelity charges at the demonstrated link (O'Reilly et al. 2024,
     # PRL 133, 090802): polarization mixing dominated the pair error;
     # temporal mismatch and dark counts were bundled at 0.4%. Cited in 5.1.
