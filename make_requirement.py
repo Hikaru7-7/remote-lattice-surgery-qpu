@@ -84,12 +84,14 @@ if __name__ == "__main__":
     assert expected_windows(0.99, 6) < 1.07
 
     # ---- ch7 (discussion): the distilled operating point ---------------
-    # One round of double selection consumes three raw pairs and succeeds
+    # One round of double selection consumes N_RAW_IN raw pairs and succeeds
     # when both checks pass, roughly (1-eps)^2 at raw error eps. The rate
-    # demand scales by 3/P_ds and eta_int by its square root.
+    # demand scales by N_RAW_IN/P_ds and eta_int by its square root. N_RAW_IN
+    # imported from qec_distill (the certified circuit) so the two cannot drift.
+    import qec_distill as QD
     eps_raw = 0.06                       # baseline raw pair error (ch6)
     p_ds = (1 - eps_raw) ** 2
-    factor = 3.0 / p_ds
+    factor = QD.N_RAW_IN / p_ds
     eta99_base = 100 * required_eta_int(d, 1, ln100)[0]
     print(f"\ndistilled point at baseline: P_ds ~ {p_ds:.2f}, "
           f"demand x{factor:.1f}, eta_int x{math.sqrt(factor):.2f} "

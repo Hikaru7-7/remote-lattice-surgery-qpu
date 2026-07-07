@@ -12,28 +12,42 @@ A timing layer prices the certified schedule in seconds from published
 demonstrations, and a requirement layer inverts the priced demand into the
 efficiency the design's ion--photon interface must deliver.
 
-This is the software behind Sections 4.4 and 5.2 of the thesis *Trapped-Ion
-Multi-Computer Design for Remote Lattice Surgery* (Keio University, 2026).
-Every count and every claim in those sections can be reproduced here.
+This is the software behind Sections 4.4, 5.2, 5.3, 6.3, 7.2, and 7.3 of the
+thesis *Trapped-Ion Multi-Computer Design for Remote Lattice Surgery* (Keio
+University, 2026). Every count and every claim in those sections can be
+reproduced here.
 
-**What it is not.** It moves ions, not quantum states. It proves the round
-can be scheduled without conflict, and prices it. It returns no logical
-error rate.
+**What it is not.** The scheduler moves ions, not quantum states. It proves
+the round can be scheduled without conflict, and the timing layer prices it.
+Neither returns a logical error rate. A separate injection layer does measure
+logical error, but on the abstract surface and repetition codes, not on the
+physical ion schedule. Noise on the physical schedule itself is still future
+work.
 
 ## Requirements
 
-Python 3. Nothing else. All three programs use only the standard library.
+Python 3. The scheduler, timing, requirement, fidelity, supply, distillation,
+and visualizer layers use only the standard library. Two numerical layers need
+add-ons: `qec_inject.py` uses `numpy`, and `qec_inject_stim.py` /
+`qec_inject_stim_hw.py` use `numpy`, `stim`, and `pymatching`. Install those
+with `pip install numpy stim pymatching`.
 
 ## Run it
 
 ```
-python3 qec_scheduler.py        # named checks, then every check at every odd d = 3..27 (expect 17 PASS)
+python3 qec_scheduler.py        # named checks, then every check at every odd d = 3..27 (expect 21 PASS, 22 at d = 3)
 python3 qec_scheduler.py 7      # one-distance report: placement, seam, depth, tally
 python3 qec_visualizer.py      # build the d=3 and d=5 HTML animations
 python3 qec_visualizer.py 7    # build the d=7 HTML animations
 python3 qec_visualizer.py all  # rebuild every odd d = 3..27 and print the sweep table
 python3 qec_timing.py          # price the schedule in seconds: durations, T_round, T_merge, demand rate
 python3 make_requirement.py    # invert the demand into the required interface efficiency
+python3 make_fidelity.py       # the seam-grade floor, the memory line, the required visibility
+python3 make_supply.py         # the MEMS supply side: geometry to the fiber, scenarios, verdict preview
+python3 qec_distill.py         # certify the double-selection distillation round at every odd d
+python3 qec_inject.py          # code-capacity injection: the space-like seam effect (numpy)
+python3 qec_inject_stim.py     # circuit-level seam factor and its recovery (needs stim + pymatching)
+python3 qec_inject_stim_hw.py  # circuit-level at the demonstrated hardware rates (needs stim + pymatching)
 ```
 
 The default run ends by certifying every odd distance up to 27, so the claim
@@ -47,6 +61,13 @@ in the thesis is exactly what the command shows. One distance at a time is
 | `qec_scheduler.py` | The source of truth. Builds the distance-d rotated surface code, places every ion on the chip, emits the schedule (`round_ops`), packs it into parallel time-steps (`parallel_steps`), and runs the structural checks. `op_tally` counts every physical beat so a duration model can turn the schedule into a round time. |
 | `qec_timing.py` | Prices the certified schedule in seconds. Each packed step costs its slowest operation; per-beat durations are traced to published demonstrations and bracketed optimistic/baseline/conservative. Every round-time and demand-rate number in the thesis reprints from this file. |
 | `make_requirement.py` | Inverts the priced demand into the required ion--photon interface efficiency, in the mean and the 99%-delivery forms. Chain brackets mirror Table 5.1 of the thesis; the timing comes live from `qec_timing.py`. Every requirement number in thesis Section 5.2 reprints from this file. |
+| `make_fidelity.py` | The fidelity track of thesis 5.3: the seam-grade floor from the published seam tolerance, the memory line, and the required two-photon visibility. |
+| `make_supply.py` | The supply side of thesis Chapter 6: cavity geometry to interface efficiency at the fiber, the three scenarios, and the verdict preview against the requirement. |
+| `qec_distill.py` | The distillation track of thesis Section 7.3: certifies the double-selection round at every odd distance, and prices its pair cost and rate factor (3 raw pairs to 1, demand times 3.4). |
+| `qec_inject.py` | Code-capacity error injection on the rotated surface code and the lattice-surgery seam, decoded by exact minimum-weight matching. Measures the space-like seam effect, about 1.5x the bulk rate. Uses `numpy`. |
+| `qec_inject_stim.py` | Circuit-level error injection with Stim and PyMatching. Measures the merge's time-like logical error, the seam factor `1.8^((d+1)/2)` (about 11 at d = 7), and its recovery by one distance step. Uses `numpy`, `stim`, `pymatching`. |
+| `qec_inject_stim_hw.py` | The same circuit-level measurement pinned to the demonstrated per-operation error rates. Uses `numpy`, `stim`, `pymatching`. |
+| `CIRCUIT_LEVEL_RESULTS.md` | The captured output of the circuit-level runs, tabulated for cross-checking against thesis Sections 5.3 and 7.2. |
 | `qec_visualizer.py` | Renders the scheduler's operation list, unchanged, as an interactive HTML animation. It assigns pixel coordinates and nothing else. It also runs its own overlap check on every frame, written independently of the scheduler's checks, so two separate programs agree the motion is legal. |
 | `qec_round_sim_d{3,5,7}.html` | One local error-correction round at that distance. |
 | `qec_merge_full_sim_d{3,5,7}.html` | Two rounds of the remote lattice-surgery merge, the seam read by communication ions. The full d-round merge is packed and certified in the scheduler. |
@@ -86,19 +107,19 @@ check, the hand-verified reference comparison.
 
 | d | scheduler checks | local round steps | frames | overlaps | 2-round merge steps | frames | overlaps |
 |--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|
-| 3 | 16 PASS | 28 | 59 | 0 | 52 | 149 | 0 |
-| 5 | 15 PASS | 32 | 71 | 0 | 64 | 177 | 0 |
-| 7 | 15 PASS | 36 | 83 | 0 | 72 | 205 | 0 |
-| 9 | 15 PASS | 40 | 95 | 0 | 80 | 233 | 0 |
-| 11 | 15 PASS | 44 | 107 | 0 | 88 | 261 | 0 |
-| 13 | 15 PASS | 48 | 119 | 0 | 96 | 289 | 0 |
-| 15 | 15 PASS | 52 | 131 | 0 | 104 | 317 | 0 |
-| 17 | 15 PASS | 56 | 143 | 0 | 112 | 345 | 0 |
-| 19 | 15 PASS | 60 | 155 | 0 | 120 | 373 | 0 |
-| 21 | 15 PASS | 64 | 167 | 0 | 128 | 401 | 0 |
-| 23 | 15 PASS | 68 | 179 | 0 | 136 | 429 | 0 |
-| 25 | 15 PASS | 72 | 191 | 0 | 144 | 457 | 0 |
-| 27 | 15 PASS | 76 | 203 | 0 | 152 | 485 | 0 |
+| 3 | 22 PASS | 28 | 59 | 0 | 52 | 149 | 0 |
+| 5 | 21 PASS | 32 | 71 | 0 | 64 | 177 | 0 |
+| 7 | 21 PASS | 36 | 83 | 0 | 72 | 205 | 0 |
+| 9 | 21 PASS | 40 | 95 | 0 | 80 | 233 | 0 |
+| 11 | 21 PASS | 44 | 107 | 0 | 88 | 261 | 0 |
+| 13 | 21 PASS | 48 | 119 | 0 | 96 | 289 | 0 |
+| 15 | 21 PASS | 52 | 131 | 0 | 104 | 317 | 0 |
+| 17 | 21 PASS | 56 | 143 | 0 | 112 | 345 | 0 |
+| 19 | 21 PASS | 60 | 155 | 0 | 120 | 373 | 0 |
+| 21 | 21 PASS | 64 | 167 | 0 | 128 | 401 | 0 |
+| 23 | 21 PASS | 68 | 179 | 0 | 136 | 429 | 0 |
+| 25 | 21 PASS | 72 | 191 | 0 | 144 | 457 | 0 |
+| 27 | 21 PASS | 76 | 203 | 0 | 152 | 485 | 0 |
 
 ## Headline numbers to reproduce
 
@@ -123,12 +144,27 @@ is decided in `qec_scheduler.py` and certified there. The visualizer draws that
 list and adds nothing. It rejects any operation it does not have a renderer
 for, and its frame-by-frame overlap test is an independent second check.
 
-## Next layers
+## The circuit-level layer
 
-The scheduler is certified and priced; it does not yet carry quantum
-errors. The next layer planned here is error injection on the certified
-schedule (STIM + pymatching), so the seam tolerance of remote lattice
-surgery is measured on this chip rather than cited from the literature.
+The scheduler is certified and priced. A separate layer injects noise and
+measures logical error, so the seam tolerance of remote lattice surgery is
+measured here rather than cited from the literature.
+
+- `qec_inject.py` runs code-capacity noise on the rotated surface code and on
+  the lattice-surgery seam, decodes with exact minimum-weight matching, and
+  measures the space-like seam effect, about 1.5x the bulk rate and roughly
+  flat in distance.
+- `qec_inject_stim.py` and `qec_inject_stim_hw.py` run full circuit-level noise
+  with Stim and PyMatching. They measure the merge's time-like logical error,
+  the seam factor `1.8^((d+1)/2)` (about 11 at d = 7), and its recovery by one
+  distance step. The `_hw` variant pins every noise knob to the demonstrated
+  per-operation rate.
+- `qec_distill.py` certifies the double-selection distillation round at every
+  odd distance.
+
+These run on the abstract code circuits, not on the physical ion schedule;
+injecting noise on the physical schedule itself remains future work. The
+captured results are in `CIRCUIT_LEVEL_RESULTS.md`.
 
 ## Cite
 

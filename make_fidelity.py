@@ -64,6 +64,26 @@ if __name__ == "__main__":
     print("still charged in full and non-binding, but not negligible at the")
     print("conservative round; the prose states the fractions honestly (G2).")
 
+    # The idle-dephasing charge (Section 4.2). Beyond the stored half's full-round wait, the
+    # schedule leaves a cross-row or comm ancilla elevated in the transport lane for up to
+    # worst_elevated_idle_us before its gate fires. The 137Ba+ clock qubit is first-order
+    # field-insensitive, so that wait dephases at the same memory T2 whether the ion sits in a
+    # memory well or elevated in the gradient. Charged in full at the tight 50 s T2, both idle
+    # terms stay under the seam floor, so the raw visibility floor is set by the seam grade.
+    print(f"\nidle dephasing, worst ion, charged in full at the clock T2 = 50 s:")
+    for k, br in enumerate(BRACKETS):
+        t_stored = T.schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6
+        t_elev = T.worst_elevated_idle_us(d, k) * 1e-6
+        e_stored, e_elev = t_stored / 50.0, t_elev / 50.0
+        print(f"  {br:14s} stored half {t_stored*1e3:5.1f} ms -> {e_stored:.1e}, "
+              f"elevated ancilla {t_elev*1e3:4.2f} ms -> {e_elev:.1e}  "
+              f"(sum {e_stored+e_elev:.1e})")
+    e_idle_base = (T.schedule_time_us(d, merge=False, rounds=1, k=1) * 1e-6
+                   + T.worst_elevated_idle_us(d, 1) * 1e-6) / 50.0
+    assert e_idle_base < share * 1e-3, "idle dephasing must stay under the seam floor"
+    print(f"sum at baseline {e_idle_base:.1e} stays under the {share*1e-3:.0e} seam floor, so the")
+    print("raw visibility floor is set by the seam grade, not by idle dephasing.")
+
     # required visibility: F = (1+V)/2 when distinguishability is the only
     # imperfection, so eps = (1-V)/2 and the floor inverts to V >= 1-2 eps.
     print("\nrequired two-photon visibility, V >= 1 - 2 eps_max:")
@@ -72,6 +92,16 @@ if __name__ == "__main__":
         print(f"  p_loc = {p:.0e}  ({name}):  V >= {100*v:.1f}%")
     assert abs((1 - 2*share*1e-3) - 0.996) < 1e-12
     assert abs((1 - 2*share*3e-3) - 0.988) < 1e-12
+
+    # The distilled operating floor, the point the machine runs at. Raw pairs feeding one
+    # distillation round need only the simple-protocol tolerance, about ten times the local
+    # gate error (MULTIPLIER), so the visibility requirement relaxes from the raw floor to
+    # V >= 1 - 2 (MULTIPLIER p_loc). At the tight anchor this is the 98% of Section 5.4.
+    print("\ndistilled operating floor, V >= 1 - 2 (MULTIPLIER p_loc):")
+    for name, p in P_LOC.items():
+        vd = 1.0 - 2.0 * MULTIPLIER * p
+        print(f"  p_loc = {p:.0e}  ({name}):  V >= {100*vd:.1f}%")
+    assert abs((1 - 2*MULTIPLIER*1e-3) - 0.98) < 1e-12   # the 98% distilled operating floor
 
     # chain fidelity charges at the demonstrated link (O'Reilly et al. 2024,
     # PRL 133, 090802): polarization mixing dominated the pair error;

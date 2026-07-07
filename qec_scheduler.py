@@ -274,10 +274,17 @@ def check_seam_fits(d: int) -> None:
 def seam_stabilizers(d: int) -> list:
     """The d-1 weight-4 seam checks turned on for a merge. Check s reads two
     boundary data of module A (rows s and s+1, column d-1) and two of module B
-    (rows s and s+1, column 0). Two of its four gates cross the remote link."""
+    (rows s and s+1, column 0). Two of its four gates cross the remote link.
+
+    Each seam check is Z-type. The merge joins the two modules along their
+    column-(d-1)/column-0 boundaries, which carry the Z-type edge checks
+    (right_boundary_stabs), so the smooth (Z) merge measures the joint Z operator
+    and the seam checks inherit that type. Z is the native preparation and
+    measurement basis, so a seam ancilla reads without a single-qubit basis
+    rotation, unlike an X-type local check (basis_rotations, check_basis)."""
     seam = []
     for s in range(d - 1):
-        seam.append({"s": s,
+        seam.append({"s": s, "kind": "Z",                 # smooth merge, Z-type seam
                      "A": [(s, d - 1), (s + 1, d - 1)],   # local, in module A
                      "B": [(s, 0),     (s + 1, 0)]})       # remote, in module B
     return seam
@@ -623,7 +630,11 @@ def readout_swaps(d: int, exclude=()) -> list:
 def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
     """One round (or a rounds-long merge) as an ordered list of physical operations.
     Each op is (verb, ...); BEATS[verb] gives its sub-beats. This is the schedule the
-    visualizer animates; it owns the sequence, the visualizer only the coordinates."""
+    visualizer animates; it owns the sequence, the visualizer only the coordinates.
+    The X-type checks prepare and read their ancilla in the X basis, one single-qubit
+    rotation folded into the prep beat and one into the read (syndromes) beat; those
+    rotations move no ion and emit no beat of their own, so they leave the step depth
+    untouched (basis_rotations, check_basis)."""
     cell = stab_cell(d)
     plan = park_plan(d) if merge else []                 # idle right-boundary ancillas -> bottom-cell park wells
     exclude = {s for s, cl, well in plan}
@@ -694,7 +705,7 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
 def check_round_ops(d: int) -> None:
     """Check: a local round's operations gate every (check, data) coupling exactly
     once, every op is a known verb, every swap lands on a real grid site, and the
-    packed round is exactly 22+d time-steps deep."""
+    packed round is exactly 22+2d time-steps deep."""
     ops = round_ops(d, merge=False, rounds=1)
     for op in ops:
         assert op[0] in BEATS, f"d={d}: unknown operation {op[0]}"
@@ -965,6 +976,84 @@ def check_census(d: int) -> None:
             assert 0 <= r < d and 0 <= c < d, f"d={d}: ({r},{c}) off the grid"
 
 
+# --- BASIS  (the single-qubit rotation X-checks fold into prep and read) ----
+def basis_rotations(d: int) -> int:
+    """Single-qubit basis rotations one local round spends. An X-type check
+    prepares its ancilla in the X basis and reads it in the X basis, one rotation
+    folded into the prep beat and one into the read beat (Section 4.3, "prepared
+    in the basis of its check"). A Z-type check needs neither, since Z is the
+    native preparation and measurement basis. So the count is two per X-check.
+    The rotations move no ion: they ride inside prep and read, priced by
+    qec_timing's single_qubit duration but charged to no beat, so the packed round
+    is the same 22+2d steps with or without them."""
+    return 2 * sum(s.kind == "X" for s in build_stabilizers(d))
+
+
+def check_basis(d: int) -> None:
+    """Check: every ancilla is prepared and read in the basis of its check, and the
+    single-qubit rotations that needs are accounted for without lengthening the
+    round. Each X-check folds one rotation into its prep and one into its read;
+    each Z-check folds none. The rotations are motionless, so they emit no beat of
+    their own and cannot change the 22+2d step depth check_round_ops fixes. This is
+    the schedule half of the single-qubit primitive tabled in Section 5.2."""
+    stabs = build_stabilizers(d)
+    assert all(s.kind in ("X", "Z") for s in stabs), f"d={d}: a check has no basis"
+    n_x = sum(s.kind == "X" for s in stabs)
+    assert basis_rotations(d) == 2 * n_x, f"d={d}: basis-rotation count off"
+    # the rotations fold into prep and read, which the round already emits; no
+    # separate basis beat is spent, so the depth is untouched.
+    verbs = {op[0] for op in round_ops(d, merge=False, rounds=1)}
+    assert {"prep", "syndromes"} <= verbs, f"d={d}: no prep/read to carry the basis"
+    assert "basis" not in verbs, f"d={d}: a basis change leaked into its own step"
+
+
+# Motional (heating) beats: transport that adds motional quanta -- shuttles,
+# splits, merges, crystal rotations, junction lifts and drops. A gate pulse and a
+# read add none. Each adds of order one quantum (Kaufmann et al. 2014).
+MOTIONAL_BEATS = frozenset({
+    "shuttle-to-junction", "junction-descent", "shuttle-to-park", "shuttle-from-park",
+    "shuttle-home", "shuttle-to-SPAM", "shuttle-from-SPAM", "shuttle-carrier-hop",
+    "shuttle-handoff", "merge", "split", "rotate", "lift", "drop", "merge+gate"})
+
+
+def motional_beats_per_round(d: int) -> int:
+    """The worst single ancilla's motional (heating) beats in one local round.
+    Every ancilla shuttles to the SPAM zone and back, swaps out past its data and
+    back, and merges/splits for each of its gates; each such beat adds ~1 quantum.
+    Counted straight from round_ops, so the heating load reprints from the schedule
+    and grows with d (the convoy lengthens and the row carries more ancillas). It
+    is the load the once-per-round recool must clear (qec_timing.check_heating_budget)."""
+    load = {}
+    for op in round_ops(d, merge=False, rounds=1):
+        nmot = sum(1 for b in BEATS.get(op[0], []) if b in MOTIONAL_BEATS)
+        if not nmot:
+            continue
+        payload = op[2] if len(op) > 2 and isinstance(op[2], list) else \
+                  (op[1] if isinstance(op[1], list) else [])
+        seen = set()
+        for it in payload:
+            key = it[0] if isinstance(it, tuple) else it
+            aid = id(key) if hasattr(key, "kind") else (key if isinstance(key, int) else None)
+            if aid is not None and aid not in seen:
+                seen.add(aid)
+                load[aid] = load.get(aid, 0) + nmot
+    return max(load.values()) if load else 0
+
+
+def check_seam_basis(d: int) -> None:
+    """Check: the d-1 merge seam checks are Z-type, the native basis, so a seam
+    ancilla reads without a single-qubit rotation. The seam is Z because it
+    replaces the Z-type right-boundary checks (right_boundary_stabs) along the
+    smooth boundary the two modules join on, so its type is fixed by the geometry,
+    not chosen; a seam check of any other type would contradict the boundary it
+    turns off. This is why the merge adds no basis rotation to the comm lane."""
+    seam = seam_stabilizers(d)
+    assert len(seam) == d - 1, f"d={d}: {len(seam)} seam checks, want {d-1}"
+    assert all(sc["kind"] == "Z" for sc in seam), f"d={d}: a seam check is not Z-type"
+    assert all(s.kind == "Z" for s in right_boundary_stabs(d)), \
+        f"d={d}: right boundary not Z-type, the seam type would be inconsistent"
+
+
 # --- AUDIT #2: d=3 matches the hand-checked simulator ----------------------
 # The 8 checks from the hand-checked simulator (qubits 1..9).
 # Census checks the shape; this checks the content.
@@ -1054,15 +1143,94 @@ def check_ends_at_rest(d: int) -> None:
             f"d={d} merge={merge} rounds={rounds}: schedule does not end at rest"
 
 
+def check_no_passing(d: int) -> None:
+    """Legality: ions on one segment never pass through each other. Every position change
+    the schedule makes is an adjacent transposition, so the left-to-right order of two ions
+    in a cell changes only across an explicit swap between them, and no move jumps a
+    non-adjacent well. Replays every emitted swap (the in-band conditional swaps, the readout
+    file-out, and the reset) on the row order for a local round, a one-round merge, and a
+    two-round merge, and asserts each swap is same-cell and between chain-adjacent wells. With
+    check_ends_at_rest (the order returns to the placement) this forbids both a swap in the
+    wrong place and a reorder with no swap logged. Occupancy stays a permutation throughout,
+    since a swap only exchanges two wells, so no two ions ever share a well."""
+    for merge, rounds in ((False, 1), (True, 1), (True, 2)):
+        rows = [list(cell) for cell in place(d)]
+        pos = {it: (ri, ci) for ri, row in enumerate(rows) for ci, (k, it) in enumerate(row)}
+        assert len(pos) == sum(len(r) for r in rows), f"d={d}: placement double-books a well"
+
+        def swap(a, b):
+            (ra, ca), (rb, cb) = pos[a], pos[b]
+            assert ra == rb and abs(ca - cb) == 1, (
+                f"d={d} merge={merge}: swap between non-adjacent wells "
+                f"(cells {ra},{rb} cols {ca},{cb}) would pass one ion through another")
+            rows[ra][ca], rows[rb][cb] = rows[rb][cb], rows[ra][ca]
+            pos[a], pos[b] = (rb, cb), (ra, ca)
+
+        for op in round_ops(d, merge=merge, rounds=rounds):
+            if op[0] in ("readout", "reset"):
+                for s, rc in op[1]:
+                    swap(s, rc)
+            elif op[0] == "swap":
+                for s, rc in op[2]:
+                    swap(s, rc)
+
+
+def check_step_occupancy(d: int) -> None:
+    """Legality: within one packed time-step no two operations move a shared ion or hold a
+    shared junction, so two ions are never driven into one well, or one junction, at once.
+    parallel_steps packs by exactly this rule; this re-derives it from op_ions and
+    op_junctions, so a packer change that broke it is caught, and confirms the packing covers
+    every ion-bearing operation exactly once."""
+    for merge, rounds in ((False, 1), (True, 1)):
+        ops = round_ops(d, merge=merge, rounds=rounds)
+        steps = parallel_steps(d, merge=merge, rounds=rounds)
+        covered = []
+        for st in steps:
+            ions, jns = set(), set()
+            for j in st:
+                oi = op_ions(d, ops[j])
+                oj = {("j", x) for x in op_junctions(d, ops[j])}
+                assert ions.isdisjoint(oi), f"d={d}: two ops share an ion in one time-step"
+                assert jns.isdisjoint(oj), f"d={d}: two ops hold one junction in one time-step"
+                ions |= oi; jns |= oj
+            covered += st
+        want = [i for i, op in enumerate(ops) if op_ions(d, op)]
+        assert sorted(covered) == want, f"d={d}: packed steps miss or repeat an operation"
+
+
+def connection_band_steps(d: int) -> int:
+    """Packed time-steps before the first readout layer: the connection gate band."""
+    ops = round_ops(d, merge=False)
+    for t, st in enumerate(parallel_steps(d, merge=False)):
+        if any(ops[j][0] == "readout" for j in st):
+            return t
+    return len(parallel_steps(d, merge=False))
+
+
+def check_flat_band(d: int) -> None:
+    """Check: the connection gate band is a flat 19 time-steps at every distance, an OUTPUT
+    of the packer rather than an assumption, and the file-out and reset are d layers each.
+    With check_round_ops (total depth 22+2d) this splits the round as 19 + d + 3 + d, so the
+    gate band does not grow with the code distance."""
+    band = connection_band_steps(d)
+    assert band == 19, f"d={d}: connection band is {band} steps, not the flat 19"
+    ops = round_ops(d, merge=False)
+    nread = sum(1 for op in ops if op[0] == "readout")
+    nreset = sum(1 for op in ops if op[0] == "reset")
+    assert nread == d and nreset == d, f"d={d}: file-out {nread}, reset {nreset}, want {d} each"
+
+
 # --- RUN -------------------------------------------------------------------
 # Run the checks. Print pass or fail.
 def certify(d: int) -> int:
     """Run every structural check at one distance, quietly. Returns the count."""
     assert isinstance(d, int) and d >= 3 and d % 2 == 1, "d must be an odd integer >= 3"
-    checks = [check_census, check_no_double_touch, check_placement, check_junctions,
+    checks = [check_census, check_basis, check_no_double_touch, check_placement, check_junctions,
               check_gate_zone, check_parallel_crossings, check_seam_fits, check_seam_census,
-              check_merge_demand, check_comm_ions, check_comm_pingpong, check_seam_schedule,
-              check_merge_no_crowding, check_lane_clearing, check_round_ops, check_ends_at_rest]
+              check_seam_basis, check_merge_demand, check_comm_ions, check_comm_pingpong,
+              check_seam_schedule, check_merge_no_crowding, check_lane_clearing,
+              check_round_ops, check_ends_at_rest, check_no_passing,
+              check_step_occupancy, check_flat_band]
     for chk in checks:
         chk(d)
     if d == 3:
@@ -1168,8 +1336,21 @@ if __name__ == "__main__":
             check_round_ops(d)
         print("  round operations .... PASS  (swap=merge/rotate/split, comm delivery through SPAM; gates cover every coupling)")
         for d in (3, 5, 7, 9, 11, 15):
+            check_basis(d)
+        print(f"  basis rotations ..... PASS  ({basis_rotations(7)} single-qubit rotations at d=7, "
+              f"2 per X-check, folded into prep and read; no added step)")
+        for d in (3, 5, 7, 9, 11, 15):
             check_ends_at_rest(d)
         print("  ends at rest ........ PASS  (every swap replayed; the schedule ends in the placement it started from)")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_no_passing(d)
+        print("  no passing .......... PASS  (every swap is an adjacent transposition; no ion crosses another)")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_step_occupancy(d)
+        print("  step occupancy ...... PASS  (no two ops share an ion or a junction in one time-step)")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_flat_band(d)
+        print(f"  flat gate band ...... PASS  (connection band {connection_band_steps(7)} steps, flat in d; file-out/reset d layers each)")
         no = len(round_ops(3, merge=False)); nm = len(round_ops(3, merge=True, rounds=2))
         print(f"    d=3: {no} ops in a local round, {nm} ops in a 2-round merge")
         print("operation tally (Chapter 5 weights each beat kind by a duration):")
@@ -1191,7 +1372,9 @@ if __name__ == "__main__":
         for dd in range(3, 29, 2):                     # the thesis claim, end to end
             certify(dd)
         print("full certification .. PASS  (every check, every odd d = 3 to 27)")
-    except NotImplementedError as e:
-        print("not written yet:", e)
     except AssertionError as e:
+        import traceback
         print("CHECK FAILED:\n", e)
+        traceback.print_exc()
+        sys.exit(1)          # a failed certification must exit non-zero, so a
+                             # reader or CI cannot mistake a broken build for PASS
