@@ -106,14 +106,20 @@ if __name__ == "__main__":
     # The mismatch bound (Section 7.2). The circuit-level injection runs on the
     # abstract code, so the physical schedule's transport and idle steps are
     # unpriced there. Fold them into an effective local error
-    # p_eff = p_loc + Delta. The distilled operating floor keeps its 98% while
-    # p_eff <= 1e-3, and the priced idle share sits a factor of a few below.
-    p_eff_max = (1 - 0.98) / (2 * MULTIPLIER)
+    # p_eff = p_loc + Delta. The distilled floor is not a cliff; it slides as
+    # V >= 1 - 2 MULTIPLIER p_eff. The priced Delta is the worst-ion idle plus
+    # the expected stalled-window charge (0.06 windows/round, make_requirement.py).
+    p_anchor = 1e-3
+    delta_priced = e_idle_base * 1.06
+    v_slid = 1 - 2 * MULTIPLIER * (p_anchor + delta_priced)
     print("\nmismatch bound, p_eff = p_loc + Delta (schedule steps the abstract code omits):")
-    print(f"  98% operating floor holds while p_eff <= {p_eff_max:.0e}")
-    print(f"  priced idle at baseline {e_idle_base:.1e}  = {100*e_idle_base/p_eff_max:.0f}% of the ceiling")
-    print(f"  headroom over the priced idle charge: x{p_eff_max/e_idle_base:.1f}")
-    assert abs(p_eff_max - 1e-3) < 1e-12
+    print(f"  distilled floor slides as V >= 1 - {2*MULTIPLIER} p_eff")
+    print(f"  priced Delta at baseline: idle {e_idle_base:.1e} + stall {0.06*e_idle_base:.1e}")
+    print(f"  at the tight anchor {p_anchor:.0e} the floor slides 98.0% -> {100*v_slid:.1f}%")
+    print(f"  at the family best gate 3e-4 the anchor absorbs Delta <= {p_anchor-3e-4:.1e}"
+          f"  (x{(p_anchor-3e-4)/e_idle_base:.1f} the priced idle)")
+    assert abs((1 - 2*MULTIPLIER*p_anchor) - 0.98) < 1e-12
+    assert 0.972 < v_slid < 0.975
 
     # chain fidelity charges at the demonstrated link (O'Reilly et al. 2024,
     # PRL 133, 090802): polarization mixing dominated the pair error;
