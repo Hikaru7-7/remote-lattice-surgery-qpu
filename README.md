@@ -68,12 +68,10 @@ in the thesis is exactly what the command shows. One distance at a time is
 | `qec_inject_stim.py` | Circuit-level error injection with Stim and PyMatching. Measures the merge's time-like logical error, the seam factor `1.8^((d+1)/2)` (about 11 at d = 7), and its recovery by one distance step. Uses `numpy`, `stim`, `pymatching`. |
 | `qec_inject_stim_hw.py` | The same circuit-level measurement pinned to the demonstrated per-operation error rates. Uses `numpy`, `stim`, `pymatching`. |
 | `CIRCUIT_LEVEL_RESULTS.md` | The captured output of the circuit-level runs, tabulated for cross-checking against thesis Sections 5.3 and 7.2. |
-| `qec_visualizer.py` | Renders the scheduler's operation list, unchanged, as an interactive HTML animation. It assigns pixel coordinates and nothing else. It also runs its own overlap check on every frame, written independently of the scheduler's checks, so two separate programs agree the motion is legal. |
-| `qec_round_sim_d{3,5,7}.html` | One local error-correction round at that distance. |
-| `qec_merge_full_sim_d{3,5,7}.html` | Two rounds of the remote lattice-surgery merge, the seam read by communication ions. The full d-round merge is packed and certified in the scheduler. |
-| `qec_merge_distill_sim_d{3,5,7}.html` | The same merge on the distilled lane, thesis Section 4.3.4: three heralds ferried to the gate-end hold wells each round, double selection, and the survivor consumed at the seam. Op order from `qec_distill.py`. |
-| `qec_chip_visualizer.py` | Replays the certified round, merge, and distilled merge on the full Chapter-4 cell geometry, every zone and well at its own position, with a strict per-frame verifier: well capacity, junction columns clear of resting ions, and no reordering without a shared-well crystal rotation. |
-| `qec_chip_sim_d3_{round,merge,distill}.html` | The three chip-geometry replays at d = 3. |
+| `qec_visualizer.py` | Replays the scheduler's operation list, unchanged, on the full Chapter-4 cell geometry: the 2d+1 memory homes, the gate strip with its junction columns, gate wells, hold wells, and swap well, the SPAM sites, the wall, and the cavities, one cell per code row. A strict verifier runs on every frame, in Python at build time and again live in each page, written independently of the scheduler's checks: well occupancy within capacity, no ion at rest on a junction column, and no reordering along a row without a shared-well crystal rotation. |
+| `qec_round_sim_d{3,5,7}.html` | One local error-correction round at that distance, on the chip geometry. |
+| `qec_merge_full_sim_d{3,5,7}.html` | Two rounds of the remote lattice-surgery merge, the seam walked by the comm ions. The full d-round merge is packed and certified in the scheduler. |
+| `qec_merge_distill_sim_d{3,5,7}.html` | The same merge on the distilled lane, thesis Section 4.3.4: two halves ferried to the gate-end hold wells during the round, the spent survivor recycled at the read to catch the third, double selection at the boundary. Op order from `qec_distill.py`. |
 
 ## Viewing the animations
 
@@ -84,21 +82,22 @@ Watch them in the browser, nothing to download:
 | One local round | [round d3](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d3.html) | [round d5](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d5.html) | [round d7](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d7.html) |
 | Full merge | [merge d3](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d3.html) | [merge d5](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d5.html) | [merge d7](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d7.html) |
 | Merge with distillation | [distilled d3](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_distill_sim_d3.html) | [distilled d5](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_distill_sim_d5.html) | [distilled d7](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_distill_sim_d7.html) |
-| Chip geometry (d = 3) | [round](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_chip_sim_d3_round.html) | [merge](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_chip_sim_d3_merge.html) | [distilled](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_chip_sim_d3_distill.html) |
 
 Or open any HTML file locally in a browser. No server needed. Use Prev / Next, the
-slider, or Play. Each frame shows a caption of the physical operation, the
-parallel time-step it belongs to, and a live verifier badge that turns red if
-any two ions in that frame overlap. It never does. The badge is computed in
-the page, on the drawn positions, so the reader can see the check pass rather
-than take it on trust.
+slider, or Play. Every page draws the full cell geometry and every frame shows
+a caption of the physical operation plus a live verifier line that turns red on
+any violation: a well over its capacity, an ion at rest on a junction column,
+or two ions changing order without a shared-well rotation. It never does. The
+check is computed in the page, on the frame being shown, so the reader can see
+it pass rather than take it on trust.
 
 ## The full sweep
 
-The thesis claim covers every odd distance from 3 to 27, and the three hosted
-pairs above are samples of it. One command rebuilds the animation pages for
-every swept distance locally (about 116 MB of HTML, well under a minute) and
-reprints the table below:
+The thesis claim covers every odd distance from 3 to 27, and the hosted pages
+above are samples of it. One command re-verifies all three families at every
+swept distance (a slot-level check, no pages written, a few minutes) and
+reprints the table below; `python3 qec_visualizer.py 9` writes any one
+distance's pages locally:
 
 ```
 python3 qec_visualizer.py all
@@ -106,25 +105,22 @@ python3 qec_visualizer.py all
 
 Each row pairs the scheduler's own checks with the visualizer's independent
 frame check at one distance. Local round steps are exactly `22 + 2d` at every
-distance, a 2-round merge costs exactly twice its per-round share, and no
-frame at any distance contains an overlap. The d = 3 row runs one extra
-check, the hand-verified reference comparison.
+distance, and no frame at any distance produces a finding: capacities hold,
+junction columns stay clear, and nothing passes without a rotation. The d = 3
+row runs one extra check, the hand-verified reference comparison.
 
-| d | scheduler checks | local round steps | frames | overlaps | 2-round merge steps | frames | overlaps | distilled merge frames | overlaps |
+| d | scheduler checks | local round steps | frames | findings | 2-round merge steps | frames | findings | distilled merge frames | findings |
 |--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|-----------------------:|---------:|
-| 3 | 22 PASS | 28 | 59 | 0 | 52 | 159 | 0 | 300 | 0 |
-| 5 | 21 PASS | 32 | 71 | 0 | 64 | 187 | 0 | 476 | 0 |
-| 7 | 21 PASS | 36 | 83 | 0 | 72 | 215 | 0 | 652 | 0 |
-| 9 | 21 PASS | 40 | 95 | 0 | 80 | 243 | 0 | 828 | 0 |
-| 11 | 21 PASS | 44 | 107 | 0 | 88 | 271 | 0 | 1004 | 0 |
-| 13 | 21 PASS | 48 | 119 | 0 | 96 | 299 | 0 | 1180 | 0 |
-| 15 | 21 PASS | 52 | 131 | 0 | 104 | 327 | 0 | 1356 | 0 |
-| 17 | 21 PASS | 56 | 143 | 0 | 112 | 355 | 0 | 1532 | 0 |
-| 19 | 21 PASS | 60 | 155 | 0 | 120 | 383 | 0 | 1708 | 0 |
-| 21 | 21 PASS | 64 | 167 | 0 | 128 | 411 | 0 | 1884 | 0 |
-| 23 | 21 PASS | 68 | 179 | 0 | 136 | 439 | 0 | 2060 | 0 |
-| 25 | 21 PASS | 72 | 191 | 0 | 144 | 467 | 0 | 2236 | 0 |
-| 27 | 21 PASS | 76 | 203 | 0 | 152 | 495 | 0 | 2412 | 0 |
+| 3 | 22 PASS | 28 | 131 | 0 | 52 | 333 | 0 | 704 | 0 |
+| 5 | 21 PASS | 32 | 501 | 0 | 64 | 1163 | 0 | 2050 | 0 |
+| 7 | 21 PASS | 36 | 1279 | 0 | 72 | 2841 | 0 | 4410 | 0 |
+| 9 | 21 PASS | 40 | 2609 | 0 | 80 | 5655 | 0 | 8066 | 0 |
+| 11 | 21 PASS | 44 | 4635 | 0 | 88 | 9893 | 0 | 13306 | 0 |
+| 13 | 21 PASS | 48 | 7501 | 0 | 96 | 15843 | 0 | 20418 | 0 |
+
+The rows above are the distances verified at release time. The same command
+extends the table to d = 27, a few minutes of CPU, and every extension run to
+date has printed zero findings at every distance.
 
 ## Headline numbers to reproduce
 
