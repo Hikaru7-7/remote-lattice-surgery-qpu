@@ -208,15 +208,17 @@ def readout_layers(cells: list) -> int:
 # it but are never stored on it. Memory and gate are separate segments of each
 # cell axis: data and ancillas are STORED in the memory segment (data on the
 # data columns); GATES happen in the gate segment, one gate well per ancilla,
-# at the ancilla (offset) columns; JUNCTIONS sit at the data columns of the gate
-# segment and connect neighbouring cells. So a gate well never shares a column
-# with a junction, and no ion is ever at rest on a junction.
+# at the ancilla (offset) columns; JUNCTIONS are indexed by their data column,
+# each mouth offset a quarter of the column pitch beside it (column c + 1/4),
+# between that column and the neighbouring gate well, and connect neighbouring
+# cells. So a gate well never shares a column with a junction mouth, and no ion
+# is ever at rest on a junction.
 def check_gate_zone(d: int) -> None:
     """Check: one gate well per ancilla, every gate well off the junction
     columns (so gates never happen on a junction), and every cross-row gate
     routes through a junction that exists between the two cells."""
     pos = col_x(d, place(d))
-    junctions = set(range(d))                       # junction columns = data columns
+    junctions = set(range(d))                       # junction index = its data column; the mouth sits at c + 1/4
     gate_wells = []
     for stab in build_stabilizers(d):
         col = pos[stab][1]                          # this ancilla's gate-well column
