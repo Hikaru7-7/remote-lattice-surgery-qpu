@@ -89,9 +89,15 @@ a caption of the physical operation plus a live verifier line that turns red on
 any violation: a well over its capacity, an ion at rest on a junction column,
 or two ions changing order without a shared-well rotation, an ion resting on
 a junction column, two ions sharing one junction point, a mid-transit change
-of junction column, or an ion entering a row anywhere but at a junction
-column's channel. It never fires. Every move is a continuous path: along the
-row through explicit rotations, vertical only at a junction column. The
+of junction column, an ion entering a row anywhere but at a junction
+column's channel, a gate firing on anything but an isolated pair in a gate
+well, a read away from a SPAM site or the swap well, a communication ion in
+the memory zone, or a code ion past the optical wall. It never fires. Every
+move is a continuous path: along the row through explicit pairwise rotations,
+vertical only at a junction column. Occupancy law: one ion rests per well,
+gates fire on isolated pairs, parking in the gate strip reaches three, one
+passing transit may briefly make four (the transport crystals of Pino et al.
+2021), and the swap well never exceeds its resident pair. The
 check is computed in the page, on the frame being shown, so the reader can see
 it pass rather than take it on trust. The capacities are the design's own:
 one ion rests per well, gates and swaps merge pairs, a gate well carries at

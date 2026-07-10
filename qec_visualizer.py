@@ -66,8 +66,8 @@ class G:
         self.SLOTS = (self.MX + list(self.WELL.values()) + self.HOLDX + [self.SWX]
                       + self.PARKX + self.SPX + [self.CAVX, self.YBX])
         self.CAP = {**{x2: 2 for x2 in self.MX},
-                    **{x2: 4 for x2 in self.WELL.values()},
-                    **{x2: 2 for x2 in self.HOLDX}, self.SWX: 3,
+                    **{x2: 3 for x2 in self.WELL.values()},
+                    **{x2: 2 for x2 in self.HOLDX}, self.SWX: 2,
                     **{x2: 2 for x2 in self.PARKX},
                     **{x2: 2 for x2 in self.SPX}, self.CAVX: 2, self.YBX: 1}
     def gapy(self, a, b): return (self.CY[a] + self.CY[b]) / 2
@@ -90,8 +90,18 @@ def build(d, merge, rounds, distill=False):
     for ci, chain in enumerate(CHAINS):
         for j, (kind, item) in enumerate(chain):
             i = ID_DATA[item] if kind == "data" else LABEL[item]
-            home[i] = (g.MX[j], ci)
             ions[i] = "data" if kind == "data" else ("X" if item.kind == "X" else "Z")
+            if kind == "data":
+                home[i] = (g.MX[1 + 2*item[1]], ci)
+            else:
+                lft = chain[j - 1] if j > 0 else None
+                rgt = chain[j + 1] if j < len(chain) - 1 else None
+                if lft and lft[0] == "data" and rgt and rgt[0] == "data":
+                    home[i] = (g.MX[2 + 2*lft[1][1]], ci)
+                elif lft is None:
+                    home[i] = (g.MX[0], ci)
+                else:
+                    home[i] = (g.MX[2*d], ci)
     for r in range(d):
         ions["C%d" % r] = "comm" if r in SEAM else "spare"
         home["C%d" % r] = (g.CAVX, r)
@@ -106,6 +116,7 @@ def build(d, merge, rounds, distill=False):
     slot = {i: home[i] for i in home}
     FR = []
     ROT = []
+    TRANSIT = set()
 
     def groups(row):
         gg = {}
@@ -131,10 +142,40 @@ def build(d, merge, rounds, distill=False):
     JC = set(g.JCOL.values())
     last = {i: slot[i] for i in slot}
     ERRS = []
+    GATE_WELLS = set(g.WELL.values())
+    READ_SPOTS = set(g.SPX) | {g.SWX}
+
+    def _zone_check(op=None, pairs=None):
+        if op == "gate" and pairs:
+            for a, b in pairs:
+                sa, sb = slot[a], slot[b]
+                if sa != sb or len(sa) != 2 or sa[0] not in GATE_WELLS:
+                    ERRS.append(f"gate on {a},{b} outside a shared gate well")
+                elif len(occ(sa[0], sa[1])) != 2:
+                    ERRS.append(f"gate on {a},{b} in a well not isolated to the pair")
+        if op == "read" and pairs:
+            for (i,) in pairs:
+                si = slot[i]
+                if len(si) != 2 or si[0] not in READ_SPOTS:
+                    ERRS.append(f"read of {i} away from a SPAM site or the swap well")
+        for i, st in slot.items():
+            if len(st) != 2 or isinstance(st[0], str):
+                if ions[i] == "held":
+                    ERRS.append(f"held body {i} in a junction")
+                continue
+            x, row = st
+            if ions[i] == "comm" and x < g.JCOL[0] - 1:
+                ERRS.append(f"communication ion {i} entered the memory zone")
+            if ions[i] in ("data", "X", "Z") and x > g.WALLX:
+                ERRS.append(f"code ion {i} crossed the optical wall")
+            if ions[i] == "held" and (x < g.JCOL[0] - 1):
+                ERRS.append(f"held body {i} left the communication region")
 
     ROWY = {CY[r]: r for r in range(d)}
 
-    def _inc_check():
+    def _inc_check(op=None, pairs=None, tv=None):
+        _zone_check(op, pairs)
+        pass
         movers = [i for i in slot if slot[i] != last[i]]
         if not movers:
             return
@@ -176,9 +217,11 @@ def build(d, merge, rounds, distill=False):
                 for a in mem:
                     for b in mem:
                         if a < b: share.add((a, b))
+        tvs = set(TRANSIT) | ({tv} if tv else set())
         for (x, row), mem in cur.items():
             if any(m in mem for m in movers):
-                if x in g.CAP and len(mem) > g.CAP[x]:
+                over = len(mem) - g.CAP.get(x, 99)
+                if x in g.CAP and over > min(1, sum(1 for m in mem if m in tvs)):
                     ERRS.append(f"well x={round(x)} row {row} holds {len(mem)} > cap {g.CAP[x]}")
                 if x in JC:
                     ERRS.append(f"{mem} at REST on junction column x={round(x)}")
@@ -203,19 +246,33 @@ def build(d, merge, rounds, distill=False):
         for i in movers:
             last[i] = slot[i]
 
-    def snap(cap, hi=None, junc=None, badge=""):
+    def snap(cap, hi=None, junc=None, badge="", op=None, pairs=None, tv=None):
         if CHECK_ONLY:
-            _inc_check()
+            _inc_check(op, pairs, tv)
             FR.append(1)
             return
         f = {"slots": {i: (list(slot[i]) if len(slot[i]) == 3 else [slot[i][0], slot[i][1]]) for i in slot},
              "pos": render(), "cap": cap, "hi": hi or [], "junc": junc or [], "badge": badge}
+        if op: f["op"] = op
+        if pairs: f["pairs"] = [sorted(p) for p in pairs]
+        tvs = sorted(TRANSIT | ({tv} if tv else set()))
+        if tvs: f["tv"] = tvs
         FR.append(f)
 
     def occ(x, row):
         return [i for i, s in slot.items() if len(s) == 2 and s[0] == x and s[1] == row]
 
     def hop(i, tx, row, cap, hi=None, badge=""):
+        while len(occ(tx, row)) >= g.CAP.get(tx, 99) and i not in occ(tx, row):
+            e = [x2 for x2 in occ(tx, row) if x2 != i][0]
+            region = (list(g.WELL.values()) if tx in g.WELL.values() else
+                      g.MX if tx in g.MX else
+                      g.HOLDX + [g.SWX] if (tx in g.HOLDX or tx == g.SWX) else
+                      g.SPX if tx in g.SPX else g.SLOTS)
+            spots = sorted([w for w in region if w != tx and len(occ(w, row)) < g.CAP.get(w, 0)],
+                           key=lambda w: abs(w - tx))
+            hop(e, spots[0], row, cap + f" {e} steps aside within its zone to make room.", hi=[e])
+        TRANSIT.add(i)
         x0 = slot[i][0] if len(slot[i]) == 2 else slot[i][1]
         step = 1 if tx > x0 else -1
         path = sorted([x for x in g.SLOTS if (x - x0)*step > 0.5 and (tx - x)*step > 0.5],
@@ -223,11 +280,23 @@ def build(d, merge, rounds, distill=False):
         for bx in path:
             if occ(bx, row):
                 slot[i] = (bx, row)
-                snap(cap + f" {i} merges into the occupied well on its path and the crystal rotates it through.",
-                     hi=hi or [i], badge=badge or "rotate-through")
+                snap(cap + f" {i} merges into the occupied well on its path and pairwise rotations carry it through.",
+                     hi=hi or [i], badge=badge or "rotate-through", tv=i)
                 if bx == g.SWX: ROT.append(len(FR) - 1)
         slot[i] = (tx, row)
+        TRANSIT.discard(i)
         snap(cap, hi=hi or [i], badge=badge)
+
+    def ensure_room(tx, row, cap):
+        while len(occ(tx, row)) >= g.CAP.get(tx, 99):
+            e = occ(tx, row)[0]
+            region = (list(g.WELL.values()) if tx in g.WELL.values() else
+                      g.MX if tx in g.MX else
+                      g.HOLDX + [g.SWX] if (tx in g.HOLDX or tx == g.SWX) else
+                      g.SPX if tx in g.SPX else g.SLOTS)
+            spots = sorted([w for w in region if w != tx and len(occ(w, row)) < g.CAP.get(w, 0)],
+                           key=lambda w: abs(w - tx))
+            hop(e, spots[0], row, cap + f" {e} steps aside within its zone to make room.", hi=[e])
 
     def multi(assign, cap, hi=None, badge=""):
         for i, (x, row) in assign.items(): slot[i] = (x, row)
@@ -240,13 +309,15 @@ def build(d, merge, rounds, distill=False):
         step = 1 if jx > x0 else -1
         path = sorted([x for x in g.SLOTS if (x - x0)*step > 0.5 and (jx - x)*step > 0.5],
                       key=lambda x: (x - x0)*step)
+        TRANSIT.add(i)
         for bx in path:
             if occ(bx, row):
                 slot[i] = (bx, row)
-                snap(cap + f" {i} merges into the occupied well on its path and the crystal rotates it through.",
-                     hi=hi or [i], badge="rotate-through")
+                snap(cap + f" {i} merges into the occupied well on its path and pairwise rotations carry it through.",
+                     hi=hi or [i], badge="rotate-through", tv=i)
                 if bx == g.SWX: ROT.append(len(FR) - 1)
         slot[i] = ("J", jx, CY[row])
+        TRANSIT.discard(i)
         snap(cap, hi=hi or [i], badge="at the junction column")
 
     def cross_rows(i, c, src, dst, cap, hi=None):
@@ -277,16 +348,40 @@ def build(d, merge, rounds, distill=False):
               badge="band enters strip")
 
     def band_out():
-        assign = {i: home[i] for i in BANDW if len(slot[i]) == 2 and slot[i][0] in list(g.WELL.values())}
-        multi(assign, "The band files back to its memory homes, one return, order preserved.", badge="band returns")
+        movers = sorted([i for i in BANDW if slot[i] != home[i]],
+                        key=lambda i: home[i][0])
+        for i in movers:
+            hop(i, home[i][0], home[i][1], f"Band return: {i} files back to its memory home.", hi=[i])
+        snap("The band is back in its memory homes.", hi=movers, badge="band returns")
 
     def to_well(i, wx, row, cap, hi=None):
         if slot[i] != (wx, row):
             hop(i, wx, row, cap, hi=hi)
 
+    def isolate(wx, row, keep, avoid, cap):
+        """Evict every resident of the well except `keep`, each to the nearest
+        well with room, preferring wells not gating this step, so the gate
+        fires on the pair alone."""
+        extras = [i for i in occ(wx, row) if i not in keep]
+        for e in extras:
+            spots = sorted([w for w in g.WELL.values()
+                            if w != wx and len(occ(w, row)) < g.CAP[w]],
+                           key=lambda w: (w in avoid, abs(w - wx)))
+            hop(e, spots[0], row, cap + f" {e} steps aside to a well with room so the pair is alone.", hi=[e])
+
+    def gate_pair(a, dd, row, avoid, cap):
+        wx = slot[a][0] if slot[a][0] in g.WELL.values() else slot[dd][0]
+        isolate(wx, row, {a, dd}, avoid, cap)
+        if slot[dd] != (wx, row):
+            hop(dd, wx, row, cap + f" {dd} steps into the gate well.", hi=[dd])
+        if slot[a] != (wx, row):
+            hop(a, wx, row, cap + f" {a} steps into the gate well.", hi=[a])
+        return wx
+
     net = {l: "C%d" % l for l in SEAM}
     car = {l: "C%dB" % l for l in SEAM}
     surv, PEND, FILEOUT, XPEND = {}, {}, {}, {}
+    FERRYQ, NEED3, CHK = {}, {}, {}
     def C(l): return surv[l] if (distill and l in surv) else car[l]
 
     def free_hold_bodies(l):
@@ -301,26 +396,31 @@ def build(d, merge, rounds, distill=False):
         hop(car[l], slot[hh][0], l, f"The carrier parks half {k} beside {hh} in a gate-end hold well, a one-hop ferry.")
         hop(car[l], g.SWX, l, "The carrier returns to the swap well.")
 
-    def distill_batch(l, order, tag):
+    def distill_cnots(l, order, tag):
         sv, c1, c2 = order
         hop(sv, g.WELL[1], l, f"{tag} lane {l}: {sv}, the first catch, takes the survivor's middle gate well.")
         hop(c1, g.WELL[0], l, f"{c1} takes the left gate well.")
         hop(c2, g.WELL[2], l, f"{c2} takes the right gate well.")
         slot[c1] = (g.WELL[1], l)
-        snap(f"Bilateral CNOT one: {c1} merges with the survivor and the gate fires.", hi=[c1, sv])
+        snap(f"Bilateral CNOT one: {c1} and the survivor, an isolated pair.", hi=[c1, sv],
+             op="gate", pairs=[(c1, sv)])
         slot[c1] = (g.WELL[0], l)
         snap(f"{c1} splits back out.", hi=[c1])
-        hop(c1, g.SPX[0], l, f"{c1} hops into the SPAM zone and is read in Z, the bit-flip check.", badge="read Z")
         slot[c2] = (g.WELL[1], l)
-        snap(f"Bilateral CNOT two: {c2} merges with the survivor while {c1} is still being read.", hi=[c2, sv])
+        snap(f"Bilateral CNOT two: {c2} and the survivor, an isolated pair.", hi=[c2, sv],
+             op="gate", pairs=[(c2, sv)])
         slot[c2] = (g.WELL[2], l)
         snap(f"{c2} splits back out and takes its basis rotation.", hi=[c2])
-        hop(c2, g.SPX[1], l, f"{c2} is read in X, the phase-flip check.", badge="read X")
+        surv[l] = sv
+
+    def distill_reads(l, c1, c2, sv):
+        hop(c1, g.SPX[0], l, f"{c1} hops to a SPAM site and is read in Z, the bit-flip check.")
+        snap(f"Read of {c1} in Z.", hi=[c1], badge="read Z", op="read", pairs=[(c1,)])
+        hop(c2, g.SPX[1], l, f"{c2} follows and is read in X, the phase-flip check.")
+        snap(f"Read of {c2} in X.", hi=[c2], badge="read X", op="read", pairs=[(c2,)])
         snap(f"Both modules' checks agree: keep. {sv} holds the purified pair.", hi=[sv], badge="keep")
         hop(c1, g.HOLDX[1], l, f"{c1} resets and returns to the hold pool.")
         hop(c2, g.HOLDX[2], l, f"{c2} resets and returns to the hold pool.")
-        hop(sv, g.SWX, l, f"{sv} moves to the swap well, purified pair ready for the seam.")
-        surv[l] = sv
 
     _ops = round_ops(d, merge, rounds)
     for op in _ops:
@@ -338,7 +438,9 @@ def build(d, merge, rounds, distill=False):
                     pool = free_hold_bodies(l)
                     for k, hh in enumerate(pool):
                         ferry_half(l, k, hh, "Warm-up")
-                    distill_batch(l, pool, "Warm-up")
+                    distill_cnots(l, pool, "Warm-up")
+                    distill_reads(l, pool[1], pool[2], pool[0])
+                    hop(pool[0], g.SWX, l, f"{pool[0]} joins the carrier at the swap well, purified pair ready for the seam.")
             snap(f"Round {op[1] + 1} of {op[2]}.", badge=f"round {op[1] + 1}")
         elif v == "park":
             for s, cl, well in op[1]:
@@ -357,20 +459,18 @@ def build(d, merge, rounds, distill=False):
                 band_in()
             if v == "inrow":
                 L = op[1] + 1
+                avoid = {slot[A(s)][0] for s, _ in op[2] if len(slot[A(s)]) == 2}
                 for s, rc in op[2]:
-                    if slot[Dt(rc)] != slot[A(s)]:
-                        to_well(Dt(rc), slot[A(s)][0], slot[A(s)][1], f"Step {L}: {Dt(rc)} steps into {A(s)}'s gate well.")
-                snap(f"Step {L}: in-row gates fire, each pair one crystal in a strip gate well.",
-                     hi=[A(s) for s, _ in op[2]])
+                    gate_pair(A(s), Dt(rc), slot[A(s)][1], avoid, f"Step {L}:")
+                    snap(f"Step {L}: the in-row gate fires, an isolated two-ion crystal in a gate well.",
+                         hi=[A(s), Dt(rc)], op="gate", pairs=[(A(s), Dt(rc))])
             elif v == "swap":
                 L = op[1] + 1
                 for s, rc in op[2]:
                     a, dd = A(s), Dt(rc)
-                    sa, sd = slot[a], slot[dd]
-                    slot[a] = sd
-                    snap(f"Step {L}: {a} merges into {dd}'s well to pass it.", hi=[a])
-                    slot[a], slot[dd] = sd, sa
-                    snap(f"Step {L}: the crystal rotates and splits; {a} and {dd} have exchanged wells.", hi=[a])
+                    src, dst = slot[a], slot[dd]
+                    hop(dd, src[0], src[1], f"Step {L}: {dd} works its way over, rotating past {a}.", hi=[dd])
+                    hop(a, dst[0], dst[1], f"Step {L}: {a} takes {dd}'s freed well; the two have exchanged.", hi=[a])
             elif v == "xlift":
                 L = op[1] + 1
                 XPEND.clear()
@@ -384,11 +484,15 @@ def build(d, merge, rounds, distill=False):
                 L = op[1] + 1
                 for s, rc in op[2]:
                     c, ac, tr = XPEND[A(s)]
+                    isolate(g.WELL[c], rc[0], {Dt(rc), A(s)}, set(), f"Step {L}:")
+                    if slot[Dt(rc)][0] != g.WELL[c]:
+                        hop(Dt(rc), g.WELL[c], rc[0], f"Step {L}: {Dt(rc)} steps into the gate well beside the junction.", hi=[Dt(rc)])
                     slot[A(s)] = ("J", g.JCOL[c], CY[rc[0]])
-                    snap(f"Step {L}: {A(s)} drops into the neighbor row's channel at its junction column.",
+                    snap(f"Step {L}: {A(s)} drops into the prepared row's channel at its junction column.",
                          hi=[A(s)], badge="in transit")
-                    tx = slot[Dt(rc)][0]
-                    hop(A(s), tx, rc[0], f"Step {L}: {A(s)} moves along the row and joins {Dt(rc)}'s gate well; the gate fires.", hi=[A(s)])
+                    hop(A(s), g.WELL[c], rc[0], f"Step {L}: {A(s)} joins {Dt(rc)}; the pair is alone in the well.", hi=[A(s)])
+                    snap(f"Step {L}: the cross-row gate fires on the isolated pair.",
+                         hi=[A(s)], op="gate", pairs=[(A(s), Dt(rc))])
             elif v == "xlower":
                 L = op[1] + 1
                 for s, c, ac, tr in op[2]:
@@ -399,13 +503,15 @@ def build(d, merge, rounds, distill=False):
             elif v == "xdrop":
                 L = op[1] + 1
                 for s, c, ac, swapped in op[2]:
+                    tgt = BANDW.get(A(s), g.WELL[d - 1])
+                    ensure_room(tgt, ac, f"Step {L}:")
                     slot[A(s)] = ("J", g.JCOL[c], CY[ac])
                     snap(f"Step {L}: {A(s)} drops back into its home row's channel.", hi=[A(s)], badge="in transit")
-                    hop(A(s), BANDW.get(A(s), g.WELL[d - 1]), ac, f"Step {L}: {A(s)} returns along the row to its own strip well.", hi=[A(s)])
+                    hop(A(s), tgt, ac, f"Step {L}: {A(s)} returns along the row to its own strip well.", hi=[A(s)])
             elif v == "comm_out":
                 L = op[1] + 1
-                for l in op[2]:
-                    hop(C(l), g.WELL[d - 1], l, f"Step {L}: the seam ion steps from the swap well into the strip, toward its boundary data.", badge="seam excursion")
+                snap(f"Step {L}: the seam ions ready at their swap wells while the seam gate wells clear.",
+                     hi=[C(l) for l in op[2]], badge="seam excursion")
             elif v == "comm_lift":
                 L = op[1] + 1
                 for l in op[2]:
@@ -416,12 +522,24 @@ def build(d, merge, rounds, distill=False):
             elif v == "comm_gate":
                 L = op[1] + 1
                 for l, rc in op[2]:
+                    isolate(g.WELL[d - 1], rc[0], {Dt(rc), C(l)}, set(), f"Step {L}:")
+                    if slot[Dt(rc)][0] != g.WELL[d - 1]:
+                        hop(Dt(rc), g.WELL[d - 1], rc[0], f"Step {L}: the boundary data steps into the seam gate well.", hi=[Dt(rc)])
                     if len(slot[C(l)]) == 3 and rc[0] != l:
                         slot[C(l)] = ("J", g.JCOL[d - 1], CY[rc[0]])
-                        snap(f"Step {L}: {C(l)} drops into the neighbor row's channel at the boundary junction.",
+                        snap(f"Step {L}: {C(l)} drops into the prepared row's channel at the boundary junction.",
                              hi=[C(l)], badge="in transit")
-                    tx = slot[Dt(rc)][0]
-                    hop(C(l), tx, rc[0], f"Step {L}: {C(l)} joins the boundary data's well; the seam gate fires.", hi=[C(l)])
+                    hop(C(l), g.WELL[d - 1], rc[0], f"Step {L}: {C(l)} joins the boundary data, the pair alone in the well.", hi=[C(l)])
+                    snap(f"Step {L}: the seam gate fires on the isolated pair.",
+                         hi=[C(l)], op="gate", pairs=[(C(l), Dt(rc))])
+                if distill:
+                    for l, rc in op[2]:
+                        if FERRYQ.get(l):
+                            FERRYQ[l] = False
+                            pool = free_hold_bodies(l)[:2]
+                            for k, hh in enumerate(pool):
+                                ferry_half(l, k, hh, "With the seam ion out, next batch,")
+                            PEND[l] = pool
             elif v == "comm_lower":
                 L = op[1] + 1
                 for l in op[2]:
@@ -443,13 +561,17 @@ def build(d, merge, rounds, distill=False):
         elif v == "readout":
             if BANDW:
                 band_out(); BANDW.clear()
+                if distill and NEED3:
+                    for l in sorted(NEED3):
+                        old = NEED3.pop(l)
+                        ferry_half(l, 2, old, "Third catch, off the critical path:")
+                        distill_cnots(l, PEND.get(l, [])[:2] + [old], "Boundary:")
+                        CHK[l] = (PEND[l][0], PEND[l][1], old)
             for s, rc in op[1]:
                 a, dd = A(s), Dt(rc)
                 sa, sd = slot[a], slot[dd]
-                slot[a] = sd
-                snap(f"File-out: {a} merges into {dd}'s well.", hi=[a])
-                slot[a], slot[dd] = sd, sa
-                snap(f"The crystal rotates and splits: {a} has passed {dd}.", hi=[a])
+                hop(a, sd[0], sd[1], f"File-out: {a} merges into {dd}'s well.", hi=[a])
+                hop(dd, sa[0], sa[1], f"The crystal rotates and splits: {a} has passed {dd}.", hi=[dd])
         elif v == "to_spam":
             order = sorted([A(s) for s in op[1]], key=lambda i: -slot[i][0])
             FILEOUT.update({a: slot[a] for a in order})
@@ -465,50 +587,54 @@ def build(d, merge, rounds, distill=False):
         elif v == "measure":
             if distill:
                 snap("The survivors are read at the swap wells. This round's purified pairs reach module B.",
-                     hi=[C(l) for l in op[1]], badge="purified pairs to B")
+                     hi=[C(l) for l in op[1]], badge="purified pairs to B", op="read",
+                     pairs=[(C(l),) for l in op[1]])
                 for l in op[1]:
                     old = surv.pop(l, None)
                     if old is None:
                         continue
                     free = [x for x in g.HOLDX if not occ(x, l)]
                     hop(old, free[0], l, f"{old} resets and rejoins the hold pool, an empty body again.")
-                    ferry_half(l, 2, old, "Third catch,")
-                    distill_batch(l, PEND.get(l, [])[:2] + [old], "Boundary:")
+                    NEED3[l] = old
             else:
                 snap("The carriers are read at their swap wells. This round's Bell pairs reach module B.",
-                     hi=[C(l) for l in op[1]], badge="pairs to B")
+                     hi=[C(l) for l in op[1]], badge="pairs to B", op="read",
+                     pairs=[(C(l),) for l in op[1]])
         elif v == "from_spam":
             order = sorted([A(s) for s in op[1]], key=lambda a: -FILEOUT[a][0])
             for a in order:
                 tx, row = FILEOUT[a]
                 hop(a, tx, row, f"{a} shuttles back in from the SPAM zone to where it left the row.", badge="convoy")
+            if distill and CHK:
+                for l in sorted(CHK):
+                    sv = surv[l]
+                    trio = CHK.pop(l)
+                    c1, c2 = trio[1], trio[2]
+                    distill_reads(l, c1, c2, sv)
         elif v == "reset":
             for s, rc in op[1]:
                 a, dd = A(s), Dt(rc)
                 sa, sd = slot[a], slot[dd]
-                slot[a] = sd
-                snap(f"Reset file-in: {a} merges back into {dd}'s well.", hi=[a])
-                slot[a], slot[dd] = sd, sa
-                snap(f"Rotation undone: {a} is back on the memory side of {dd}.", hi=[a])
+                hop(a, sd[0], sd[1], f"Reset file-in: {a} merges back into {dd}'s well.", hi=[a])
+                hop(dd, sa[0], sa[1], f"Rotation undone: {a} is back on the memory side of {dd}.", hi=[dd])
         elif v == "reset_done":
-            assign = {}
-            for s in STABS:
-                i = A(s)
-                if len(slot[i]) == 2 and (slot[i][0] in g.MX or slot[i][0] in g.SPX):
-                    assign[i] = home[i]
-            for n in range(1, d*d + 1):
-                assign["d%d" % n] = home["d%d" % n]
-            multi(assign, "Everyone is back in the memory home it started from. The round ends at rest.", badge="at rest")
+            if distill:
+                for l in sorted(SEAM):
+                    if l in surv and slot[surv[l]] != (g.SWX, l):
+                        hop(surv[l], g.SWX, l, f"{surv[l]} joins the carrier at the swap well, ready for the next seam round.")
+            strays = [i for i in ions if ions[i] in ("data", "X", "Z")
+                      and i in home and slot[i] != home[i]
+                      and not (merge and any(slot[i] == (px, d - 1) for px in g.PARKX))]
+            for i in sorted(strays, key=lambda i: home[i][0]):
+                hop(i, home[i][0], home[i][1], f"{i} walks back to its memory home.", hi=[i])
+            snap("Everyone is back in the memory home it started from. The round ends at rest.", badge="at rest")
         elif v == "herald":
             if distill:
                 for l in sorted(op[1]):
-                    pool = free_hold_bodies(l)[:2]
-                    for k, hh in enumerate(pool):
-                        ferry_half(l, k, hh, "Next batch,")
-                    PEND[l] = pool
-                snap("Two of the next batch's halves are parked; the third body is still out at the seam. "
-                     "Four live states and one attempter: the five-ion lane at full occupancy.",
-                     badge="occupancy 5")
+                    FERRYQ[l] = True
+                snap("The networkers attempt through the round; the catches land once the seam ion "
+                     "leaves the swap well, so the ferry rotations stay pairwise.",
+                     hi=[net[l] for l in op[1]], badge="herald")
             else:
                 snap("The networkers herald fresh Bell pairs at their cavities; Yb keeps them cold.",
                      hi=[net[l] for l in op[1]], badge="herald")
@@ -668,11 +794,13 @@ show(0);
 </script></body></html>"""
 
 
-def verify(FR, g):
+def verify(FR, g, kinds=None):
     errs = []
     d = g.d
     JC = set(g.JCOL.values())
     ROWY = {g.CY[r]: r for r in range(d)}
+    GATE_WELLS = set(g.WELL.values())
+    READ_SPOTS = set(g.SPX) | {g.SWX}
     def rowx(st, row):
         if len(st) == 2 and not isinstance(st[0], str) and st[1] == row:
             return st[0]
@@ -687,11 +815,35 @@ def verify(FR, g):
                 gg.setdefault((s[0], s[1]), []).append(i)
             elif len(s) == 3:
                 jpts.setdefault((s[1], s[2]), []).append(i)
+        tvs = set(f.get("tv") or [])
         for (x, row), mem in gg.items():
-            if x in g.CAP and len(mem) > g.CAP[x]:
+            over = len(mem) - g.CAP.get(x, 99)
+            if x in g.CAP and over > min(1, sum(1 for m in mem if m in tvs)):
                 errs.append((fi, f"well x={round(x)} row {row} holds {len(mem)} > cap {g.CAP[x]}: {mem}"))
             if x in JC:
                 errs.append((fi, f"{mem} at REST on junction column x={round(x)}"))
+        if f.get("op") == "gate":
+            for a, b in f.get("pairs", []):
+                sa, sb = f["slots"][a], f["slots"][b]
+                if sa != sb or len(sa) != 2 or sa[0] not in GATE_WELLS:
+                    errs.append((fi, f"gate on {a},{b} outside a shared gate well"))
+                else:
+                    n = sum(1 for i, s2 in f["slots"].items() if s2 == sa)
+                    if n != 2:
+                        errs.append((fi, f"gate on {a},{b} not isolated to the pair ({n} in well)"))
+        if f.get("op") == "read":
+            for pr in f.get("pairs", []):
+                si = f["slots"][pr[0]]
+                if len(si) != 2 or si[0] not in READ_SPOTS:
+                    errs.append((fi, f"read of {pr[0]} away from a SPAM site or the swap well"))
+        if kinds:
+            for i, s2 in f["slots"].items():
+                if len(s2) != 2 or isinstance(s2[0], str):
+                    continue
+                if kinds[i] == "comm" and s2[0] < min(JC) - 1:
+                    errs.append((fi, f"communication ion {i} entered the memory zone"))
+                if kinds[i] in ("data", "X", "Z") and s2[0] > g.WALLX:
+                    errs.append((fi, f"code ion {i} crossed the optical wall"))
         for pt, mem in jpts.items():
             if len(mem) > 1:
                 errs.append((fi, f"{mem} share one junction point"))
@@ -777,14 +929,14 @@ def selftest():
     which is how the row-entry hole survived until an eyeball caught it."""
     import copy
     FR, ions, g = build(3, True, 2, False)
-    assert not verify(FR, g), "clean run must verify"
+    assert not verify(FR, g, ions), "clean run must verify"
     k = len(FR) // 2
     anc = [i for i in FR[k]["slots"] if i.startswith("A")]
     dat = [i for i in FR[k]["slots"] if i.startswith("d")]
     def planted(mutate, name):
         BAD = copy.deepcopy(FR)
         mutate(BAD)
-        n = len(verify(BAD, g))
+        n = len(verify(BAD, g, ions))
         print(f"  planted {name:28s} -> {'caught' if n else 'MISSED'} ({n} findings)")
         assert n, name
     def teleport(B):
@@ -813,6 +965,29 @@ def selftest():
         B[k]["slots"][anc[0]] = ["J", g.JCOL[0], g.gapy(0, 1)]
         B[k + 1]["slots"][anc[0]] = ["J", g.JCOL[2], g.gapy(0, 1)]
     planted(jswitch, "junction switch mid-transit")
+    gf = next(j for j, f in enumerate(FR) if f.get("op") == "gate")
+    def gate3(B):
+        pr = B[gf]["pairs"][0]
+        w = B[gf]["slots"][pr[0]]
+        extra = [i for i in dat if B[gf]["slots"][i] != w][0]
+        B[gf]["slots"][extra] = list(w)
+    planted(gate3, "third ion in a gating well")
+    def gatemem(B):
+        pr = B[gf]["pairs"][0]
+        for i in pr:
+            B[gf]["slots"][i] = [g.MX[2], 0]
+    planted(gatemem, "gate outside the gate zone")
+    rf = next(j for j, f in enumerate(FR) if f.get("op") == "read")
+    def readaway(B):
+        pr = B[rf]["pairs"][0]
+        B[rf]["slots"][pr[0]] = [g.MX[2], 0]
+    planted(readaway, "read away from SPAM or swap well")
+    def commmem(B):
+        B[k]["slots"]["C0B"] = [g.MX[2], 0]
+    planted(commmem, "comm ion in the memory zone")
+    def datapastwall(B):
+        B[k]["slots"][dat[0]] = [g.CAVX, 0]
+    planted(datapastwall, "code ion past the optical wall")
     print("selftest: every planted violation caught")
 
 
@@ -835,7 +1010,7 @@ if __name__ == "__main__":
                                         (True, MERGE_ROUNDS, "merge_full", False),
                                         (True, MERGE_ROUNDS, "merge_distill", True)]:
             FR, ions, g = build(d, merge, rounds, dst)
-            errs = build.last_errs if CHECK_ONLY else verify(FR, g)
+            errs = build.last_errs if CHECK_ONLY else verify(FR, g, ions)
             path = os.path.join(HERE, f"qec_{tag}_sim_d{d}.html")
             if not CHECK_ONLY:
                 write_html(path, d, merge, rounds, dst, FR, ions, g)
