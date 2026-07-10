@@ -20,7 +20,8 @@ Ion budget, one distilling lane, one module (peak):
   H1  ancilla-1  -- sacrificed, first parity check
   H2  ancilla-2  -- sacrificed, second parity check
 Five comm-region Ba+ per distilling lane against two for a raw lane. During
-accumulation H1 and H2 park in the memory zone's free wells (Chapter 4); at the
+accumulation the halves park in the three hold wells at the gate zone's
+interface end, beside the swap well (Chapter 4), a one-hop ferry; at the
 distillation step all three survivor/ancilla halves sit in the lane's gate-well
 column, where the two CNOTs and two reads run with the gate-zone primitives.
 
@@ -85,8 +86,9 @@ def distill_round(d: int) -> list:
 
 def hold_wells(d: int, lane: int) -> dict:
     """The three hold wells this lane uses for the survivor and two ancillas.
-    They reuse the memory zone's free wells during accumulation and the lane's
-    gate-well column at the CNOT step (Chapter 4). Distinct per lane."""
+    They sit at the gate zone's interface end beside the swap well during
+    accumulation, and the halves move to the lane's gate-well column at the
+    CNOT step (Chapter 4). Distinct per lane."""
     return {"survivor": ("hold", lane, 0),
             "ancilla1": ("hold", lane, 1),
             "ancilla2": ("hold", lane, 2)}
