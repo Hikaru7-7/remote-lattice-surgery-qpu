@@ -89,7 +89,11 @@ a caption of the physical operation plus a live verifier line that turns red on
 any violation: a well over its capacity, an ion at rest on a junction column,
 or two ions changing order without a shared-well rotation. It never does. The
 check is computed in the page, on the frame being shown, so the reader can see
-it pass rather than take it on trust.
+it pass rather than take it on trust. The capacities are the design's own:
+one ion rests per well, gates and swaps merge pairs, a gate well carries at
+most the four-ion crystal of thesis Table 4.1, and a swap well carries three
+where the distilled lane's survivor waits beside the ping-pong pair. The
+frame census across all hosted pages never exceeds them.
 
 ## The full sweep
 
