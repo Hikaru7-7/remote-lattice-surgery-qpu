@@ -139,23 +139,23 @@ net = {l:"C%d"%l for l in SEAM}; car = {l:"C%dB"%l for l in SEAM}
 surv = {}
 def C(l): return surv[l] if MODE=="distill" and l in surv else car[l]
 
-def accumulate_and_distill(l, tag):
-    """One §4.3.4 batch on lane l: three heralds ferried to the gate-end hold
-    wells, then double selection in the gate wells, checks read in SPAM,
-    survivor left waiting at the swap well for the next seam round."""
-    pool = sorted([i for i in ions if ions[i]=="held" and slot[i][1]==l and slot[i][0] in HOLDX],
+PEND = {}
+
+def free_hold_bodies(l):
+    return sorted([i for i in ions if ions[i]=="held" and slot[i][1]==l and slot[i][0] in HOLDX],
                   key=lambda i: slot[i][0])
-    if len(pool) < 3:
-        snap(f"Lane {l}: hold pool short, batch skipped.", badge="finding"); return
-    for k, hh in enumerate(pool):
-        snap(f"{tag} lane {l}: the networker heralds raw pair {k} at the cavity.", hi=[net[l]], badge="herald")
-        hop(net[l], SWX, l, f"The networker carries the fresh half to the swap well.")
-        snap(f"Crystal rotation at the swap well: the carrier {car[l]} takes the half.", hi=[net[l], car[l]])
-        hop(net[l], CAVX, l, "The networker returns to the cavity and keeps attempting.")
-        hop(car[l], slot[hh][0], l, f"The carrier parks half {k} beside {hh} in a gate-end hold well, a one-hop ferry.")
-        hop(car[l], SWX, l, "The carrier returns to the swap well.")
-    sv, c1, c2 = pool[0], pool[1], pool[2]
-    hop(sv, WELL[1], l, f"{sv}, the first catch, takes the survivor's middle gate well.")
+
+def ferry_half(l, k, hh, tag):
+    snap(f"{tag} lane {l}: the networker heralds raw pair {k} at the cavity.", hi=[net[l]], badge="herald")
+    hop(net[l], SWX, l, f"The networker carries the fresh half to the swap well.")
+    snap(f"Crystal rotation at the swap well: the carrier {car[l]} takes the half.", hi=[net[l], car[l]])
+    hop(net[l], CAVX, l, "The networker returns to the cavity and keeps attempting.")
+    hop(car[l], slot[hh][0], l, f"The carrier parks half {k} beside {hh} in a gate-end hold well, a one-hop ferry.")
+    hop(car[l], SWX, l, "The carrier returns to the swap well.")
+
+def distill_batch(l, order, tag):
+    sv, c1, c2 = order
+    hop(sv, WELL[1], l, f"{tag} lane {l}: {sv}, the first catch, takes the survivor's middle gate well.")
     hop(c1, WELL[0], l, f"{c1} takes the left gate well.")
     hop(c2, WELL[2], l, f"{c2} takes the right gate well.")
     slot[c1] = (WELL[1], l)
@@ -182,7 +182,10 @@ for op in _ops:
         if MODE == "distill":
             snap("Warm-up: before round 1 each active lane distills its first batch.", badge="tier 3")
             for l in sorted(SEAM):
-                accumulate_and_distill(l, "Warm-up")
+                pool = free_hold_bodies(l)
+                for k, hh in enumerate(pool):
+                    ferry_half(l, k, hh, "Warm-up")
+                distill_batch(l, pool, "Warm-up")
     elif v == "round":
         snap(f"Round {op[1]+1} of 2.", badge=f"round {op[1]+1}")
     elif v == "park":
@@ -299,9 +302,13 @@ for op in _ops:
             snap("The survivors are read at the swap wells. This round's purified pairs reach module B.",
                  hi=[C(l) for l in op[1]], badge="purified pairs to B")
             for l in op[1]:
+                old = surv.pop(l, None)
+                if old is None:
+                    continue
                 free = [x for x in HOLDX if not occ(x,l)]
-                hop(surv[l], free[0], l, f"{surv[l]} resets and rejoins the hold pool, an empty body again.")
-                del surv[l]
+                hop(old, free[0], l, f"{old} resets and rejoins the hold pool, an empty body again.")
+                ferry_half(l, 2, old, "Third catch,")
+                distill_batch(l, PEND.get(l, [])[:2] + [old], "Boundary:")
         else:
             snap("The carriers are read at their swap wells. This round's Bell pairs reach module B.",
                  hi=[C(l) for l in op[1]], badge="pairs to B")
@@ -332,7 +339,13 @@ for op in _ops:
     elif v == "herald":
         if MODE == "distill":
             for l in sorted(op[1]):
-                accumulate_and_distill(l, "Next batch")
+                pool = free_hold_bodies(l)[:2]
+                for k, hh in enumerate(pool):
+                    ferry_half(l, k, hh, "Next batch")
+                PEND[l] = pool
+            snap("Two of the next batch's halves are parked; the third body is still out at the seam. "
+                 "Four live states and one attempter: the five-ion lane at full occupancy.",
+                 badge="occupancy 5")
         else:
             snap("The networkers herald fresh Bell pairs at their cavities. Yb holds them cold.",
                  hi=[net[l] for l in op[1]], badge="herald")

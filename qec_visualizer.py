@@ -83,7 +83,15 @@ def is_right_boundary(s):
     return s.weight == 2 and s.kind == "Z" and all(c == D - 1 for r, c in s.data)
 
 
-def base_ions(merge):
+def hold_xs():
+    """The three gate-end hold wells of thesis Section 4.3.4, drawn beside the
+    swap well on the interface side. Storage for the distilling lane's held
+    halves; one batch of three raw pairs accumulates here each round."""
+    sw = X(D - 0.5) + 30
+    return [sw + 54, sw + 98, sw + 142]
+
+
+def base_ions(merge, distill=False):
     """Ion table + home positions. In merge mode each active lane runs TWO comm
     ions in ping-pong (Section 4.2): "C%d" networks at the cavity, "C%dB" is the
     carrier that lives at the gate-end swap well and ferries the delivered pair.
@@ -104,12 +112,20 @@ def base_ions(merge):
             if r in SEAM:                                # active lane: a carrier too
                 ions["C%dB" % r] = ["C%dB" % r, "comm"]
                 home["C%dB" % r] = [swapx, CY[r]]
+                if distill:                              # the lane's three held halves
+                    for k, hx in enumerate(hold_xs()):
+                        hid = "h%d" % (3 * r + k + 1)
+                        ions[hid] = [hid, "held"]
+                        home[hid] = [hx, CY[r]]
     return ions, home
 
 
-def build(merge=False, rounds=1, d=3):
+def build(merge=False, rounds=1, d=3, distill=False):
     set_distance(d)
-    ions, home = base_ions(merge)
+    if distill:
+        global XIF
+        XIF = XIF + 90                                # room for the hold wells before the cavity
+    ions, home = base_ions(merge, distill)
     pos = {i: home[i][:] for i in ions}
     FR = []
     _ops = round_ops(D, merge, rounds)
@@ -117,9 +133,10 @@ def build(merge=False, rounds=1, d=3):
     cur = [None]                                        # parallel time-step of the op being rendered
 
     def snap(cap, hi=None, junc=None, badge="", merged=None):
+        mg = [sorted(p) for p in (merged or [])] + [sorted(p) for p in rest_pairs]
         FR.append({"pos": {i: pos[i][:] for i in pos}, "cap": cap, "hi": hi or [],
                    "junc": junc or [], "badge": badge, "pstep": cur[0],
-                   "merged": [sorted(p) for p in (merged or [])]})
+                   "merged": mg})
 
     def setp(i, x, y): pos[i] = [x, y]
 
@@ -154,7 +171,63 @@ def build(merge=False, rounds=1, d=3):
     # carrier is the ion the seam-gate excursion moves.
     net = {l: "C%d" % l for l in (SEAM or [])}
     car = {l: "C%dB" % l for l in (SEAM or [])}
-    def C(l):   return car[l]                          # excursion moves the carrier
+    surv = {}                                          # distill: lane -> survivor ion
+    pend = {}                                          # distill: lane -> parked halves of the next batch
+    rest_pairs = set()                                 # standing two-ion crystals (carrier + waiting survivor)
+    def C(l):   return surv[l] if (distill and l in surv) else car[l]
+    seam_rest = (swapx + 22) if distill else swapx     # the survivor shares the swap well with the carrier
+
+    def free_holds(l):
+        return [i for i in ions if ions[i][1] == "held" and pos[i][1] == CY[l]
+                and any(abs(pos[i][0] - hx) < 2 for hx in hold_xs())]
+
+    def ferry_half(l, k, hh, tag):
+        """One acc: herald at the cavity, rotation with the carrier in the swap
+        well, a one-hop ferry into hold body hh's well."""
+        snap(f"{tag}, lane {l}: the networker heralds raw pair {k} at its cavity.",
+             hi=[net[l]], badge="herald")
+        third = [(net[l], surv[l])] if l in surv else []
+        setp(net[l], swapx - 22, CY[l]); setp(car[l], swapx, CY[l])
+        snap("It carries the fresh half into the swap well; the comm ions share the crystal"
+             + (" with the waiting survivor." if third else "."),
+             merged=[(net[l], car[l])] + third, hi=[net[l]])
+        setp(net[l], swapx, CY[l]); setp(car[l], swapx - 22, CY[l])
+        snap("The crystal rotates: the carrier takes the half.",
+             merged=[(net[l], car[l])] + third, hi=[car[l]])
+        setp(net[l], XIF, CY[l]); setp(car[l], swapx, CY[l])
+        snap("The networker returns to the cavity and keeps attempting.", hi=[net[l]])
+        hx = pos[hh][0]
+        setp(car[l], hx - IW, CY[l]); setp(hh, hx + IW, CY[l])
+        snap(f"The carrier parks half {k} in {hh}'s hold well, a one-hop ferry.",
+             merged=[(car[l], hh)], hi=[car[l]])
+        setp(hh, hx, CY[l]); setp(car[l], swapx, CY[l])
+        snap("The carrier returns to the swap well.", hi=[car[l]])
+
+    def distill_batch(l, order, tag):
+        """Double selection on the three held halves, qec_distill's op order:
+        two bilateral CNOTs onto the survivor, reads in Z then X, keep."""
+        sv, c1, c2 = order
+        svx = pos[sv][0]
+        c1x, c2x = pos[c1][0], pos[c2][0]
+        setp(c1, svx - IW, CY[l]); setp(sv, svx + IW, CY[l])
+        snap(f"{tag}, lane {l}: bilateral CNOT one, check onto the survivor, module B mirroring.",
+             merged=[(c1, sv)], hi=[c1, sv])
+        setp(c1, c1x, CY[l]); setp(sv, svx, CY[l])
+        snap(f"{c1} is read in Z, the bit-flip check, and both modules compare.",
+             hi=[c1], badge="read Z")
+        setp(c2, svx - IW, CY[l]); setp(sv, svx + IW, CY[l])
+        snap("Bilateral CNOT two, while the first read completes.",
+             merged=[(c2, sv)], hi=[c2, sv])
+        setp(c2, c2x, CY[l]); setp(sv, svx, CY[l])
+        snap(f"{c2} takes one basis rotation and is read in X, the phase-flip check.",
+             hi=[c2], badge="read X")
+        snap(f"Both checks agree: keep. {sv} holds the purified pair.",
+             hi=[sv], badge="keep")
+        setp(sv, seam_rest, CY[l])
+        surv[l] = sv
+        rest_pairs.add((car[l], sv))
+        snap(f"{sv} joins the carrier in the swap well, purified pair ready for the seam.",
+             hi=[sv])
 
     # --- one handler per operation the scheduler emits.  The sequence, the
     #     batching, and the beats all come from round_ops; this only places them.
@@ -163,8 +236,16 @@ def build(merge=False, rounds=1, d=3):
         v = op[0]
         if v == "prep":
             snap(f"Start of the {'merge' if op[1] else 'round'}: data and ancillas in memory wells, ancillas in their basis."
-                 + (" Each active lane has a networker at its cavity and a carrier at its gate-end swap well." if op[1] else ""))
+                 + (" Each active lane has a networker at its cavity and a carrier at its gate-end swap well." if op[1] else "")
+                 + (" The three hold wells beside each swap well hold the distilling lane's spare halves." if distill else ""))
         elif v == "round":
+            if distill and not surv:
+                snap("Warm-up: with the blocked lanes cleared, each active lane distills its first batch before round 1.", badge="warm-up")
+                for l in sorted(SEAM):
+                    pool = sorted(free_holds(l), key=lambda i: pos[i][0])
+                    for k, hh in enumerate(pool):
+                        ferry_half(l, k, hh, "Warm-up")
+                    distill_batch(l, pool, "Warm-up")
             snap(f"Round {op[1] + 1} of {op[2]}.", badge=f"round {op[1] + 1}")
         elif v == "park":
             # scheduler.park_plan gives the ancillas and their bottom-cell wells. The shuttle
@@ -230,6 +311,8 @@ def build(merge=False, rounds=1, d=3):
             L = op[1] + 1; lanes = op[2]; mode = op[3]
             tgt = (swapx + cx) / 2                        # clear of the boundary data until the gate merges
             for l in lanes:                              # short hop: swap well -> toward the seam gate
+                if distill and l in surv:
+                    rest_pairs.discard((car[l], surv[l]))
                 setp(C(l), tgt, CY[l])
             snap(f"Step {L}: the carriers step from the swap well toward their boundary data"
                  + ("." if mode == "same" else ", heading for their junctions."),
@@ -259,18 +342,40 @@ def build(merge=False, rounds=1, d=3):
             for l in lanes:
                 if mode == "same":
                     setp(Dt((l, D - 1)), cx, CY[l])
-                setp(C(l), swapx, CY[l])                 # carrier back to the swap well
-            snap(f"Step {L}: the carriers step back to their swap wells.", hi=[C(l) for l in lanes])
+                setp(C(l), seam_rest, CY[l])             # seam ion back into the swap well
+                if distill and l in surv:
+                    rest_pairs.add((car[l], surv[l]))
+            snap(f"Step {L}: the seam ions step back to their rest wells.", hi=[C(l) for l in lanes])
         elif v == "comm_arrive":
             L = op[1] + 1
             for l in op[2]:
-                setp(C(l), swapx, CY[l])                 # carrier waits at the swap well
-            snap(f"Step {L}: the carriers are back at the gate-end swap wells.",
+                setp(C(l), seam_rest, CY[l])             # seam ion waits at its rest well
+                if distill and l in surv:
+                    rest_pairs.add((car[l], surv[l]))
+            snap(f"Step {L}: the seam ions are back at the gate end.",
                  hi=[C(l) for l in op[2]])
         elif v == "measure":
-            snap("The carrier ions are measured; this round's Bell pairs reach module B. "
-                 "The networkers keep attempting at the cavities.",
-                 hi=[C(l) for l in op[1]], badge=f"{len(op[1])} pairs -> B")
+            if distill:
+                snap("The survivors are read beside the swap wells; this round's purified pairs reach module B.",
+                     hi=[C(l) for l in op[1]], badge=f"{len(op[1])} purified pairs -> B")
+                for l in op[1]:
+                    old = surv.pop(l, None)
+                    if old is None:
+                        continue
+                    rest_pairs.discard((car[l], old))
+                    free = [hx for hx in hold_xs()
+                            if not any(ions[i][1] == "held" and abs(pos[i][0] - hx) < 2
+                                       and pos[i][1] == CY[l] for i in ions)]
+                    setp(old, free[0], CY[l])
+                    snap(f"{old} is spent and resets, an empty body back in the hold pool.",
+                         hi=[old], badge="recycle")
+                    ferry_half(l, 2, old, "Third catch")
+                    order = pend.get(l, []) + [old]
+                    distill_batch(l, order, "Boundary")
+            else:
+                snap("The carrier ions are measured; this round's Bell pairs reach module B. "
+                     "The networkers keep attempting at the cavities.",
+                     hi=[C(l) for l in op[1]], badge=f"{len(op[1])} pairs -> B")
         elif v == "readout":
             swap_pairs([(A(s), Dt(rc)) for s, rc in op[1]], "Readout bubble: an ancilla and its neighbour data")
         elif v == "to_spam":
@@ -293,9 +398,24 @@ def build(merge=False, rounds=1, d=3):
                    "Ancillas are reset and back in their memory wells. The schedule ends where it began.")
             snap(txt, hi=[LABEL[s] for s in STABS if not (merge and is_right_boundary(s))])
         elif v == "herald":
-            snap("The networker ions herald a fresh Bell pair at their cavities.",
-                 hi=[net[l] for l in op[1]])
+            if distill:
+                for l in sorted(op[1]):
+                    pool = sorted(free_holds(l), key=lambda i: pos[i][0])
+                    for k, hh in enumerate(pool):
+                        ferry_half(l, k, hh, "Next batch")
+                    pend[l] = pool
+                snap("Two of the next batch's halves are parked; the third body is still out at the seam. "
+                     "The five-ion lane: one state consumed, two parked, one attempting, one ferrying.",
+                     badge="occupancy 5")
+            else:
+                snap("The networker ions herald a fresh Bell pair at their cavities.",
+                     hi=[net[l] for l in op[1]])
         elif v == "comm_swap":
+            if distill:
+                snap("Ping-pong roles hold in the distilled lane: the networker keeps the cavity, "
+                     "the carrier keeps the ferry, and the survivor pipeline replaces the raw handoff.",
+                     badge="distilled lane")
+                continue
             # ping-pong handoff at the gate-end swap well. The networker that just
             # heralded carries its fresh pair over to the swap well, meets the
             # emptied carrier there, and the two crystal-rotate to pass: the fresh
@@ -382,6 +502,8 @@ if(DATA.xif){const t=E("text",{x:DATA.xif-6,y:DATA.celly[0]-31,"font-size":11,fi
  DATA.celly.forEach((y,ci)=>gZ.appendChild(E("path",{d:"M "+(DATA.xif+30)+" "+(y-14)+" A 17 17 0 0 1 "+(DATA.xif+30)+" "+(y+14),fill:"none",stroke:"var(--teal)","stroke-width":2,opacity:.55})));}
 if(DATA.swapx){const t=E("text",{x:DATA.swapx-10,y:DATA.swaprows[0]-31,"font-size":11,fill:"var(--mut)"});t.textContent="gate-end swap wells";gZ.appendChild(t);
  DATA.swaprows.forEach(y=>gZ.appendChild(E("rect",{x:DATA.swapx-16,y:y-16,width:32,height:32,rx:9,fill:"none",stroke:"var(--purple)","stroke-width":1.6,"stroke-dasharray":"4 3",opacity:.7})));}
+(DATA.holds||[]).forEach(h=>{gZ.appendChild(E("rect",{x:h[0]-15,y:h[1]-15,width:30,height:30,rx:8,fill:"none",stroke:"var(--teal)","stroke-width":1.4,"stroke-dasharray":"4 3",opacity:.65}));});
+if((DATA.holds||[]).length){const t=E("text",{x:DATA.holds[0][0]-4,y:DATA.holds[0][1]-31,"font-size":11,fill:"var(--mut)"});t.textContent="hold wells";gZ.appendChild(t);}
 (DATA.wells||[]).forEach(w=>{gWell.appendChild(E("rect",{x:w[0]-22,y:w[1]-19,width:44,height:38,rx:10,fill:"var(--panel)",stroke:"var(--line)","stroke-width":1.2}));});
 const jel={};DATA.junctions.forEach(j=>{const lane=E("line",{x1:j.x,y1:j.y1+24,x2:j.x,y2:j.y2-24,stroke:"var(--line)","stroke-width":2.5,opacity:.5,"stroke-linecap":"round"});
  gJ.appendChild(lane);gJ.appendChild(E("circle",{cx:j.x,cy:j.y1+24,r:3.4,fill:"var(--mut)"}));gJ.appendChild(E("circle",{cx:j.x,cy:j.y2-24,r:3.4,fill:"var(--mut)"}));jel[j.c+"_"+j.b]=lane;});
@@ -389,8 +511,8 @@ if(DATA.parklane){const p=DATA.parklane;gJ.appendChild(E("line",{x1:p.x,y1:p.y1,
 const el={};for(const id in DATA.ions){const lab=DATA.ions[id][0],typ=DATA.ions[id][1],g=E("g",{});g.style.transition="transform .3s ease";
  if(typ==="data"){g.appendChild(E("circle",{cx:0,cy:0,r:15,fill:"var(--panel)",stroke:"var(--line)","stroke-width":1.4}));
   const t=E("text",{x:0,y:4,"text-anchor":"middle","font-size":10,fill:"var(--ink)"});t.textContent=lab;g.appendChild(t);el[id]={g};}
- else{const col=typ==="X"?"var(--x)":typ==="Z"?"var(--z)":typ==="comm"?"var(--teal)":"var(--line)";
-  const dk=typ==="X"?"var(--xd)":typ==="Z"?"var(--zd)":typ==="comm"?"#0a3a2e":"var(--mut)";
+ else{const col=typ==="X"?"var(--x)":typ==="Z"?"var(--z)":typ==="comm"?"var(--teal)":typ==="held"?"#6FB99C":"var(--line)";
+  const dk=typ==="X"?"var(--xd)":typ==="Z"?"var(--zd)":(typ==="comm"||typ==="held")?"#0a3a2e":"var(--mut)";
   const r=E("rect",{x:-14,y:-13,width:28,height:26,rx:5,fill:col,stroke:dk,"stroke-width":1});g.appendChild(r);
   const t=E("text",{x:0,y:4,"text-anchor":"middle","font-size":9,fill:(typ==="spare")?"var(--mut)":"#fff","font-weight":600});t.textContent=lab;g.appendChild(t);el[id]={g,rc:r,dk:dk};}
  gI.appendChild(g);}
@@ -423,8 +545,8 @@ render();
 </script></body></html>"""
 
 
-def write_html(path, merge, rounds, d=3):
-    FR, ions, home = build(merge, rounds, d)
+def write_html(path, merge, rounds, d=3, distill=False):
+    FR, ions, home = build(merge, rounds, d, distill)
     bad = [(k, bad_frame(f)) for k, f in enumerate(FR) if bad_frame(f)]
     wells = [home[i] for i in ions if ions[i][1] in ("data", "X", "Z")]
     npark = sum(1 for s in STABS if is_right_boundary(s)) if merge else 0
@@ -439,13 +561,23 @@ def write_html(path, merge, rounds, d=3):
             # reorder well of Section 4.2. Drawn so the second comm ion and its well
             # are visible, not just implied.
             "swapx": (X(D - 0.5) + 30) if merge else 0,
-            "swaprows": [CY[r] for r in range(D - 1)] if merge else []}
-    title = (f"Distance-{D} remote merge, {rounds} rounds, one comm ion per lane"
-             if merge else f"Distance-{D} error-correction round")
-    sub = (f"{rounds} full merge rounds. One comm ion per lane cycles herald, deliver, measure, re-herald; "
-           "junctions are gate-zone only and physical swaps happen in wells."
-           if merge else "One code row per cell; ions sit in wells and swap in wells, junctions link neighbouring cells.")
+            "swaprows": [CY[r] for r in range(D - 1)] if merge else [],
+            "holds": [[hx, CY[r]] for r in (sorted(SEAM) if distill else [])
+                      for hx in hold_xs()]}
+    if distill:
+        title = f"Distance-{D} remote merge with double selection, {rounds} rounds"
+        sub = (f"{rounds} merge rounds on the distilled lane: three heralds ferried to the "
+               "gate-end hold wells each round, double selection, and the survivor consumed at the seam. "
+               "The op order is qec_distill.py's certified list.")
+    else:
+        title = (f"Distance-{D} remote merge, {rounds} rounds, one comm ion per lane"
+                 if merge else f"Distance-{D} error-correction round")
+        sub = (f"{rounds} full merge rounds. One comm ion per lane cycles herald, deliver, measure, re-herald; "
+               "junctions are gate-zone only and physical swaps happen in wells."
+               if merge else "One code row per cell; ions sit in wells and swap in wells, junctions link neighbouring cells.")
     commleg = '<span><i style="border-radius:2px;background:var(--teal)"></i>comm ion</span>' if merge else ""
+    if distill:
+        commleg += '<span><i style="border-radius:2px;background:#6FB99C"></i>held half</span>'
     html = (HTML.replace("__TITLE__", title).replace("__SUB__", sub)
             .replace("__COMMLEG__", commleg).replace("__DATA__", json.dumps(data)))
     with open(path, "w") as f:
@@ -465,17 +597,21 @@ if __name__ == "__main__":
     for d in ds:
         nchk = S.certify(d)                          # the scheduler's own checks first
         cells = {}
-        for merge, rounds, tag in [(False, 1, "round"), (True, MERGE_ROUNDS, "merge_full")]:
+        import qec_distill
+        qec_distill.certify_distill(d)               # gate the distilled pages on the distill checks
+        for merge, rounds, tag, dst in [(False, 1, "round", False),
+                                        (True, MERGE_ROUNDS, "merge_full", False),
+                                        (True, MERGE_ROUNDS, "merge_distill", True)]:
             path = f"qec_{tag}_sim_d{d}.html"
-            n, bad = write_html(path, merge, rounds, d)
+            n, bad = write_html(path, merge, rounds, d, dst)
             cells[tag] = (len(S.parallel_steps(d, merge, rounds)), n, len(bad))
-            print(f"d={d} {tag:10s}: {n} frames, {len(bad)} overlaps -> {path}")
+            print(f"d={d} {tag:13s}: {n} frames, {len(bad)} overlaps -> {path}")
             for k, b in bad[:8]:
                 print(f"   frame {k}: {b}")
-        rows.append((d, nchk, cells["round"], cells["merge_full"]))
+        rows.append((d, nchk, cells["round"], cells["merge_full"], cells["merge_distill"]))
     if sweep:                                        # the two-program comparison, per distance
         print()
-        print("| d | scheduler checks | local round steps | frames | overlaps | 2-round merge steps | frames | overlaps |")
-        print("|--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|")
-        for d, nchk, (rs, rf, ro), (ms, mf, mo) in rows:
-            print(f"| {d} | {nchk} PASS | {rs} | {rf} | {ro} | {ms} | {mf} | {mo} |")
+        print("| d | scheduler checks | local round steps | frames | overlaps | 2-round merge steps | frames | overlaps | distilled merge frames | overlaps |")
+        print("|--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|-----------------------:|---------:|")
+        for d, nchk, (rs, rf, ro), (ms, mf, mo), (zs, zf, zo) in rows:
+            print(f"| {d} | {nchk} PASS | {rs} | {rf} | {ro} | {ms} | {mf} | {mo} | {zf} | {zo} |")

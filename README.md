@@ -71,6 +71,9 @@ in the thesis is exactly what the command shows. One distance at a time is
 | `qec_visualizer.py` | Renders the scheduler's operation list, unchanged, as an interactive HTML animation. It assigns pixel coordinates and nothing else. It also runs its own overlap check on every frame, written independently of the scheduler's checks, so two separate programs agree the motion is legal. |
 | `qec_round_sim_d{3,5,7}.html` | One local error-correction round at that distance. |
 | `qec_merge_full_sim_d{3,5,7}.html` | Two rounds of the remote lattice-surgery merge, the seam read by communication ions. The full d-round merge is packed and certified in the scheduler. |
+| `qec_merge_distill_sim_d{3,5,7}.html` | The same merge on the distilled lane, thesis Section 4.3.4: three heralds ferried to the gate-end hold wells each round, double selection, and the survivor consumed at the seam. Op order from `qec_distill.py`. |
+| `qec_chip_visualizer.py` | Replays the certified round, merge, and distilled merge on the full Chapter-4 cell geometry, every zone and well at its own position, with a strict per-frame verifier: well capacity, junction columns clear of resting ions, and no reordering without a shared-well crystal rotation. |
+| `qec_chip_sim_d3_{round,merge,distill}.html` | The three chip-geometry replays at d = 3. |
 
 ## Viewing the animations
 
@@ -80,6 +83,8 @@ Watch them in the browser, nothing to download:
 |---|---|---|---|
 | One local round | [round d3](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d3.html) | [round d5](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d5.html) | [round d7](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_round_sim_d7.html) |
 | Full merge | [merge d3](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d3.html) | [merge d5](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d5.html) | [merge d7](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_full_sim_d7.html) |
+| Merge with distillation | [distilled d3](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_distill_sim_d3.html) | [distilled d5](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_distill_sim_d5.html) | [distilled d7](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_merge_distill_sim_d7.html) |
+| Chip geometry (d = 3) | [round](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_chip_sim_d3_round.html) | [merge](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_chip_sim_d3_merge.html) | [distilled](https://hikaru7-7.github.io/remote-lattice-surgery-qpu/qec_chip_sim_d3_distill.html) |
 
 Or open any HTML file locally in a browser. No server needed. Use Prev / Next, the
 slider, or Play. Each frame shows a caption of the physical operation, the
@@ -105,21 +110,21 @@ distance, a 2-round merge costs exactly twice its per-round share, and no
 frame at any distance contains an overlap. The d = 3 row runs one extra
 check, the hand-verified reference comparison.
 
-| d | scheduler checks | local round steps | frames | overlaps | 2-round merge steps | frames | overlaps |
-|--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|
-| 3 | 22 PASS | 28 | 59 | 0 | 52 | 149 | 0 |
-| 5 | 21 PASS | 32 | 71 | 0 | 64 | 177 | 0 |
-| 7 | 21 PASS | 36 | 83 | 0 | 72 | 205 | 0 |
-| 9 | 21 PASS | 40 | 95 | 0 | 80 | 233 | 0 |
-| 11 | 21 PASS | 44 | 107 | 0 | 88 | 261 | 0 |
-| 13 | 21 PASS | 48 | 119 | 0 | 96 | 289 | 0 |
-| 15 | 21 PASS | 52 | 131 | 0 | 104 | 317 | 0 |
-| 17 | 21 PASS | 56 | 143 | 0 | 112 | 345 | 0 |
-| 19 | 21 PASS | 60 | 155 | 0 | 120 | 373 | 0 |
-| 21 | 21 PASS | 64 | 167 | 0 | 128 | 401 | 0 |
-| 23 | 21 PASS | 68 | 179 | 0 | 136 | 429 | 0 |
-| 25 | 21 PASS | 72 | 191 | 0 | 144 | 457 | 0 |
-| 27 | 21 PASS | 76 | 203 | 0 | 152 | 485 | 0 |
+| d | scheduler checks | local round steps | frames | overlaps | 2-round merge steps | frames | overlaps | distilled merge frames | overlaps |
+|--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|-----------------------:|---------:|
+| 3 | 22 PASS | 28 | 59 | 0 | 52 | 159 | 0 | 300 | 0 |
+| 5 | 21 PASS | 32 | 71 | 0 | 64 | 187 | 0 | 476 | 0 |
+| 7 | 21 PASS | 36 | 83 | 0 | 72 | 215 | 0 | 652 | 0 |
+| 9 | 21 PASS | 40 | 95 | 0 | 80 | 243 | 0 | 828 | 0 |
+| 11 | 21 PASS | 44 | 107 | 0 | 88 | 271 | 0 | 1004 | 0 |
+| 13 | 21 PASS | 48 | 119 | 0 | 96 | 299 | 0 | 1180 | 0 |
+| 15 | 21 PASS | 52 | 131 | 0 | 104 | 327 | 0 | 1356 | 0 |
+| 17 | 21 PASS | 56 | 143 | 0 | 112 | 355 | 0 | 1532 | 0 |
+| 19 | 21 PASS | 60 | 155 | 0 | 120 | 383 | 0 | 1708 | 0 |
+| 21 | 21 PASS | 64 | 167 | 0 | 128 | 411 | 0 | 1884 | 0 |
+| 23 | 21 PASS | 68 | 179 | 0 | 136 | 439 | 0 | 2060 | 0 |
+| 25 | 21 PASS | 72 | 191 | 0 | 144 | 467 | 0 | 2236 | 0 |
+| 27 | 21 PASS | 76 | 203 | 0 | 152 | 495 | 0 | 2412 | 0 |
 
 ## Headline numbers to reproduce
 
