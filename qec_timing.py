@@ -148,7 +148,8 @@ def mem_segments(d: int) -> int:
 
 
 def gate_segments(d: int) -> int:
-    return math.ceil(2 * d / WELLS_PER_SEGMENT)   # d gate wells + d junctions
+    # d gate wells + d junction columns + the three hold wells + the swap well
+    return math.ceil((2 * d + 4) / WELLS_PER_SEGMENT)
 
 
 def spam_segments(d: int) -> int:
@@ -329,7 +330,7 @@ def worst_elevated_idle_us(d: int, k: int = 1) -> float:
 # independent recomputation (the phase split) must reproduce schedule_time_us, and both must
 # reproduce these pinned values, so a geometry or duration edit that moved a headline number
 # fails here loudly instead of drifting it silently.
-T_ROUND_BASELINE_MS = {3: 10.57, 7: 13.81, 13: 19.60}
+T_ROUND_BASELINE_MS = {3: 10.78, 7: 13.91, 13: 19.70}
 
 
 def check_round_time_recomputed(d: int) -> None:
@@ -339,7 +340,7 @@ def check_round_time_recomputed(d: int) -> None:
     feed. (2) phase_times_us splits the same round into band / file-out / read / reset and
     sums those. The two share no arithmetic path, so agreement catches a bug in either. The
     pinned T_ROUND_BASELINE_MS then anchors the absolute number, so a distance or duration
-    edit that moved 13.81 ms would fail here rather than pass unnoticed."""
+    edit that moved 13.91 ms would fail here rather than pass unnoticed."""
     st = schedule_time_us(d, merge=False, rounds=1, k=1)
     ph = sum(phase_times_us(d, 1).values())
     assert abs(st - ph) < 1e-6, (
