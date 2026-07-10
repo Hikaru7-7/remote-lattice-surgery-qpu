@@ -132,16 +132,23 @@ row runs one extra check, the hand-verified reference comparison.
 
 | d | scheduler checks | local round steps | frames | findings | 2-round merge steps | frames | findings | distilled merge frames | findings |
 |--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|-----------------------:|---------:|
-| 3 | 22 PASS | 28 | 186 | 0 | 52 | 447 | 0 | 818 | 0 |
-| 5 | 21 PASS | 32 | 728 | 0 | 64 | 1641 | 0 | 2528 | 0 |
-| 7 | 21 PASS | 36 | 1786 | 0 | 72 | 3911 | 0 | 5480 | 0 |
-| 9 | 21 PASS | 40 | 3504 | 0 | 80 | 7545 | 0 | 9956 | 0 |
-| 11 | 21 PASS | 44 | 6026 | 0 | 88 | 12831 | 0 | 16244 | 0 |
-| 13 | 21 PASS | 48 | 9496 | 0 | 96 | 20057 | 0 | 24632 | 0 |
+| 3 | 22 PASS | 28 | 270 | 0 | 52 | 613 | 0 | 1010 | 0 |
+| 5 | 21 PASS | 32 | 1063 | 0 | 64 | 2283 | 0 | 3170 | 0 |
+| 7 | 21 PASS | 36 | 2549 | 0 | 72 | 5495 | 0 | 6968 | 0 |
+| 9 | 21 PASS | 40 | 4893 | 0 | 80 | 10729 | 0 | 12884 | 0 |
+| 11 | 21 PASS | 44 | 8218 | 0 | 88 | 17967 | 0 | 20900 | 0 |
+| 13 | 21 PASS | 48 | 12586 | 0 | 96 | 27735 | 0 | 31542 | 0 |
+| 15 | 21 PASS | 52 | 18188 | 0 | 104 | 40027 | 0 | 44804 | 0 |
+| 17 | 21 PASS | 56 | 25168 | 0 | 112 | 55565 | 0 | 61408 | 0 |
+| 19 | 21 PASS | 60 | 33672 | 0 | 120 | 74021 | 0 | 81026 | 0 |
+| 21 | 21 PASS | 64 | 43844 | 0 | 128 | 96589 | 0 | 104852 | 0 |
+| 23 | 21 PASS | 68 | 55828 | 0 | 136 | 122417 | 0 | 132034 | 0 |
+| 25 | 21 PASS | 72 | 69768 | 0 | 144 | 153245 | 0 | 164312 | 0 |
+| 27 | 21 PASS | 76 | 85808 | 0 | 152 | 187613 | 0 | 200226 | 0 |
 
-The rows above are the distances verified at release time. The same command
-extends the table to d = 27, a few minutes of CPU, and every extension run to
-date has printed zero findings at every distance.
+The full sweep, every odd distance from 3 to 27, all three families, zero
+findings at every row: some 1.5 million frames of schedule under the eleven
+rules. The command reprints this table in a few minutes of CPU.
 
 ## Headline numbers to reproduce
 
