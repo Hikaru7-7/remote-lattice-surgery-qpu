@@ -150,26 +150,22 @@ def build(d, merge, rounds, distill=False):
             for a, b in pairs:
                 sa, sb = slot[a], slot[b]
                 if sa != sb or len(sa) != 2 or sa[0] not in GATE_WELLS:
-                    ERRS.append(f"gate on {a},{b} outside a shared gate well")
+                    ERRS.append((len(FR), f"gate on {a},{b} outside a shared gate well"))
                 elif len(occ(sa[0], sa[1])) != 2:
-                    ERRS.append(f"gate on {a},{b} in a well not isolated to the pair")
+                    ERRS.append((len(FR), f"gate on {a},{b} in a well not isolated to the pair"))
         if op == "read" and pairs:
             for (i,) in pairs:
                 si = slot[i]
                 if len(si) != 2 or si[0] not in READ_SPOTS:
-                    ERRS.append(f"read of {i} away from a SPAM site or the swap well")
+                    ERRS.append((len(FR), f"read of {i} away from a SPAM site or the swap well"))
         for i, st in slot.items():
             if len(st) != 2 or isinstance(st[0], str):
-                if ions[i] == "held":
-                    ERRS.append(f"held body {i} in a junction")
                 continue
             x, row = st
-            if ions[i] == "comm" and x < g.JCOL[0] - 1:
-                ERRS.append(f"communication ion {i} entered the memory zone")
+            if ions[i] in ("comm", "held") and x < g.JCOL[0] - 1:
+                ERRS.append((len(FR), f"communication-region ion {i} entered the memory zone"))
             if ions[i] in ("data", "X", "Z") and x > g.WALLX:
-                ERRS.append(f"code ion {i} crossed the optical wall")
-            if ions[i] == "held" and (x < g.JCOL[0] - 1):
-                ERRS.append(f"held body {i} left the communication region")
+                ERRS.append((len(FR), f"code ion {i} crossed the optical wall"))
 
     ROWY = {CY[r]: r for r in range(d)}
 
@@ -194,16 +190,16 @@ def build(d, merge, rounds, distill=False):
                 jpts.setdefault((st[1], st[2]), []).append(i)
         for pt, mem in jpts.items():
             if len(mem) > 1 and any(m in movers for m in mem):
-                ERRS.append(f"{mem} share one junction point at x={round(pt[0])}")
+                ERRS.append((len(FR), f"{mem} share one junction point at x={round(pt[0])}"))
         for i in movers:
             a, b = last[i], slot[i]
             if len(a) == 3 and len(b) == 3 and abs(a[1] - b[1]) > 0.5:
-                ERRS.append(f"{i} changed junction column mid-transit")
+                ERRS.append((len(FR), f"{i} changed junction column mid-transit"))
             for row in range(d):
                 if rowx(b, row) is not None and rowx(a, row) is None:
                     ok = len(b) == 3 and any(abs(b[1] - jx) < 0.5 for jx in g.JCOL.values())
                     if not ok:
-                        ERRS.append(f"{i} entered row {row} away from a junction column")
+                        ERRS.append((len(FR), f"{i} entered row {row} away from a junction column"))
         def cowell(state):
             gg = {}
             for i, st in state.items():
@@ -222,9 +218,9 @@ def build(d, merge, rounds, distill=False):
             if any(m in mem for m in movers):
                 over = len(mem) - g.CAP.get(x, 99)
                 if x in g.CAP and over > min(1, sum(1 for m in mem if m in tvs)):
-                    ERRS.append(f"well x={round(x)} row {row} holds {len(mem)} > cap {g.CAP[x]}")
+                    ERRS.append((len(FR), f"well x={round(x)} row {row} holds {len(mem)} > cap {g.CAP[x]}"))
                 if x in JC:
-                    ERRS.append(f"{mem} at REST on junction column x={round(x)}")
+                    ERRS.append((len(FR), f"{mem} at REST on junction column x={round(x)}"))
         rows_hit = set()
         for i in movers:
             for state in (slot, last):
@@ -242,7 +238,7 @@ def build(d, merge, rounds, distill=False):
                 for jj in range(ii + 1, len(common)):
                     a, b = common[ii], common[jj]
                     if (a in mset or b in mset) and rank[a] > rank[b] and (min(a, b), max(a, b)) not in share:
-                        ERRS.append(f"row {row}: {a} passed {b} with no shared well")
+                        ERRS.append((len(FR), f"row {row}: {a} passed {b} with no shared well"))
         for i in movers:
             last[i] = slot[i]
 
@@ -840,8 +836,8 @@ def verify(FR, g, kinds=None):
             for i, s2 in f["slots"].items():
                 if len(s2) != 2 or isinstance(s2[0], str):
                     continue
-                if kinds[i] == "comm" and s2[0] < min(JC) - 1:
-                    errs.append((fi, f"communication ion {i} entered the memory zone"))
+                if kinds[i] in ("comm", "held") and s2[0] < min(JC) - 1:
+                    errs.append((fi, f"communication-region ion {i} entered the memory zone"))
                 if kinds[i] in ("data", "X", "Z") and s2[0] > g.WALLX:
                     errs.append((fi, f"code ion {i} crossed the optical wall"))
         for pt, mem in jpts.items():
@@ -965,6 +961,15 @@ def selftest():
         B[k]["slots"][anc[0]] = ["J", g.JCOL[0], g.gapy(0, 1)]
         B[k + 1]["slots"][anc[0]] = ["J", g.JCOL[2], g.gapy(0, 1)]
     planted(jswitch, "junction switch mid-transit")
+    global CHECK_ONLY
+    CHECK_ONLY = True
+    FR2, ions2, g2 = build(3, True, 2, True)
+    inc = len(build.last_errs)
+    CHECK_ONLY = False
+    FR3, ions3, g3 = build(3, True, 2, True)
+    bat = len(verify(FR3, g3, ions3))
+    assert inc == bat == 0, f"checker paths disagree: incremental {inc}, batch {bat}"
+    print(f"  incremental and batch checkers agree ({inc} findings each)")
     gf = next(j for j, f in enumerate(FR) if f.get("op") == "gate")
     def gate3(B):
         pr = B[gf]["pairs"][0]
@@ -1017,7 +1022,8 @@ if __name__ == "__main__":
             cells[tag] = (len(parallel_steps(d, merge, rounds)), len(FR), len(errs))
             print(f"d={d} {tag:13s}: {len(FR)} frames, {len(errs)} findings"
                   + ("" if CHECK_ONLY else f" -> {os.path.basename(path)}"))
-            for fi, e in errs[:6]:
+            for item in errs[:6]:
+                fi, e = item if isinstance(item, tuple) else ("?", item)
                 print(f"   frame {fi}: {e}")
         rows.append((d, nchk, cells["round"], cells["merge_full"], cells["merge_distill"]))
     if sweep:
