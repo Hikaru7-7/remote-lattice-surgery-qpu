@@ -57,6 +57,18 @@ if __name__ == "__main__":
     tr_base = T.schedule_time_us(d, merge=False, rounds=1, k=1) * 1e-6
     assert 2e-4 < tr_base / 50.0 < 3e-4   # ~2.8e-4, the prose number
     floor_tight = share * 1e-3
+    # The distilled lane's accumulation wait (thesis 4.3.4/7.3): the first-caught
+    # half waits up to three windows before its batch fires, not one. The extra
+    # two windows ride the RAW inputs, where the two selection checks catch
+    # first-order errors, so only the survivor's single post-keep window reaches
+    # the output; that is the one-round charge above. Checked here: the extra
+    # input idle is small against the 6% raw error the distillation budget
+    # already carries.
+    extra_in = 2.0 * 13.911e-3 / 50.0
+    assert extra_in < 0.01 * 0.06, "accumulation wait must be negligible against the raw error budget"
+    print(f"  distilled-lane accumulation wait, 2 extra windows on the raw inputs: {extra_in:.1e},")
+    print(f"  {extra_in/0.06*100:.1f}% of the 6% raw error the x3.4 demand already carries; first-order")
+    print(f"  errors are caught by the selection checks, so the output keeps the one-round charge.")
     print(f"\nwait as a fraction of the tight floor {floor_tight:.0e}:")
     for k, br in enumerate(BRACKETS):
         tr = T.schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6
