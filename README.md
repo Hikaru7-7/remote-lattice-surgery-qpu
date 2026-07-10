@@ -111,6 +111,13 @@ distance's pages locally:
 python3 qec_visualizer.py all
 ```
 
+Every verifier rule also carries a failing test. `python3
+qec_visualizer.py selftest` plants one violation of each rule into a clean
+run, a teleport, a free pass, an over-capacity well, a rest on a junction
+column, a shared junction point, and a mid-transit column switch, and
+requires the verifier to refuse each one. A rule without a failing test is
+a blind spot waiting to happen.
+
 Each row pairs the scheduler's own checks with the visualizer's independent
 frame check at one distance. Local round steps are exactly `22 + 2d` at every
 distance, and no frame at any distance produces a finding: capacities hold,

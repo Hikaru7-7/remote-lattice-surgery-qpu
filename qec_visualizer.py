@@ -771,9 +771,57 @@ def write_html(path, d, merge, rounds, distill, FR, ions, g):
         fh.write(html)
 
 
+def selftest():
+    """Plant one violation of each verifier rule into a clean run and require
+    the verifier to refuse it. A rule without a failing test is a blind spot,
+    which is how the row-entry hole survived until an eyeball caught it."""
+    import copy
+    FR, ions, g = build(3, True, 2, False)
+    assert not verify(FR, g), "clean run must verify"
+    k = len(FR) // 2
+    anc = [i for i in FR[k]["slots"] if i.startswith("A")]
+    dat = [i for i in FR[k]["slots"] if i.startswith("d")]
+    def planted(mutate, name):
+        BAD = copy.deepcopy(FR)
+        mutate(BAD)
+        n = len(verify(BAD, g))
+        print(f"  planted {name:28s} -> {'caught' if n else 'MISSED'} ({n} findings)")
+        assert n, name
+    def teleport(B):
+        for j in range(k, k + 3):
+            B[j]["slots"][anc[0]] = [g.WELL[0], 2]
+    planted(teleport, "cross-row teleport")
+    def freepass(B):
+        r0 = [i for i in dat if B[k]["slots"][i][1] == 0 and isinstance(B[k]["slots"][i][0], float)]
+        a2, b2 = r0[0], r0[1]
+        for j in range(k, k + 3):
+            B[j]["slots"][a2], B[j]["slots"][b2] = B[j]["slots"][b2], B[j]["slots"][a2]
+    planted(freepass, "pass with no shared well")
+    def overcap(B):
+        tgt = [g.WELL[1], 0]
+        for m, i in enumerate(dat[:5]):
+            B[k]["slots"][i] = list(tgt)
+    planted(overcap, "well over capacity")
+    def jrest(B):
+        B[k]["slots"][dat[0]] = [g.JCOL[1], 0]
+    planted(jrest, "rest on a junction column")
+    def jshare(B):
+        B[k]["slots"][anc[0]] = ["J", g.JCOL[1], g.gapy(0, 1)]
+        B[k]["slots"][anc[1]] = ["J", g.JCOL[1], g.gapy(0, 1)]
+    planted(jshare, "two ions in one junction")
+    def jswitch(B):
+        B[k]["slots"][anc[0]] = ["J", g.JCOL[0], g.gapy(0, 1)]
+        B[k + 1]["slots"][anc[0]] = ["J", g.JCOL[2], g.gapy(0, 1)]
+    planted(jswitch, "junction switch mid-transit")
+    print("selftest: every planted violation caught")
+
+
 if __name__ == "__main__":
     import qec_scheduler as S
     import qec_distill
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest":
+        selftest()
+        sys.exit(0)
     sweep = len(sys.argv) > 1 and sys.argv[1] == "all"
     ds = list(range(3, 29, 2)) if sweep else ([int(sys.argv[1])] if len(sys.argv) > 1 else [3, 5])
     if sweep:
