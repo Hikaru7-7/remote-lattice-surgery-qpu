@@ -87,7 +87,11 @@ Or open any HTML file locally in a browser. No server needed. Use Prev / Next, t
 slider, or Play. Every page draws the full cell geometry and every frame shows
 a caption of the physical operation plus a live verifier line that turns red on
 any violation: a well over its capacity, an ion at rest on a junction column,
-or two ions changing order without a shared-well rotation. It never does. The
+or two ions changing order without a shared-well rotation, an ion resting on
+a junction column, two ions sharing one junction point, a mid-transit change
+of junction column, or an ion entering a row anywhere but at a junction
+column's channel. It never fires. Every move is a continuous path: along the
+row through explicit rotations, vertical only at a junction column. The
 check is computed in the page, on the frame being shown, so the reader can see
 it pass rather than take it on trust. The capacities are the design's own:
 one ion rests per well, gates and swaps merge pairs, a gate well carries at
@@ -115,12 +119,12 @@ row runs one extra check, the hand-verified reference comparison.
 
 | d | scheduler checks | local round steps | frames | findings | 2-round merge steps | frames | findings | distilled merge frames | findings |
 |--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|-----------------------:|---------:|
-| 3 | 22 PASS | 28 | 131 | 0 | 52 | 333 | 0 | 704 | 0 |
-| 5 | 21 PASS | 32 | 501 | 0 | 64 | 1163 | 0 | 2050 | 0 |
-| 7 | 21 PASS | 36 | 1279 | 0 | 72 | 2841 | 0 | 4410 | 0 |
-| 9 | 21 PASS | 40 | 2609 | 0 | 80 | 5655 | 0 | 8066 | 0 |
-| 11 | 21 PASS | 44 | 4635 | 0 | 88 | 9893 | 0 | 13306 | 0 |
-| 13 | 21 PASS | 48 | 7501 | 0 | 96 | 15843 | 0 | 20418 | 0 |
+| 3 | 22 PASS | 28 | 186 | 0 | 52 | 447 | 0 | 818 | 0 |
+| 5 | 21 PASS | 32 | 728 | 0 | 64 | 1641 | 0 | 2528 | 0 |
+| 7 | 21 PASS | 36 | 1786 | 0 | 72 | 3911 | 0 | 5480 | 0 |
+| 9 | 21 PASS | 40 | 3504 | 0 | 80 | 7545 | 0 | 9956 | 0 |
+| 11 | 21 PASS | 44 | 6026 | 0 | 88 | 12831 | 0 | 16244 | 0 |
+| 13 | 21 PASS | 48 | 9496 | 0 | 96 | 20057 | 0 | 24632 | 0 |
 
 The rows above are the distances verified at release time. The same command
 extends the table to d = 27, a few minutes of CPU, and every extension run to

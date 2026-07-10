@@ -132,14 +132,37 @@ def build(d, merge, rounds, distill=False):
     last = {i: slot[i] for i in slot}
     ERRS = []
 
+    ROWY = {CY[r]: r for r in range(d)}
+
     def _inc_check():
         movers = [i for i in slot if slot[i] != last[i]]
         if not movers:
             return
+        def rowx(st, row):
+            if len(st) == 2 and not isinstance(st[0], str) and st[1] == row:
+                return st[0]
+            if len(st) == 3 and st[2] == CY[row]:
+                return st[1]
+            return None
         def rowseq(state, row):
-            lst = [(st[0], i) for i, st in state.items()
-                   if len(st) == 2 and not isinstance(st[0], str) and st[1] == row]
+            lst = [(x, i) for i, st in state.items() for x in [rowx(st, row)] if x is not None]
             return [i for _, i in sorted(lst)]
+        jpts = {}
+        for i, st in slot.items():
+            if len(st) == 3:
+                jpts.setdefault((st[1], st[2]), []).append(i)
+        for pt, mem in jpts.items():
+            if len(mem) > 1 and any(m in movers for m in mem):
+                ERRS.append(f"{mem} share one junction point at x={round(pt[0])}")
+        for i in movers:
+            a, b = last[i], slot[i]
+            if len(a) == 3 and len(b) == 3 and abs(a[1] - b[1]) > 0.5:
+                ERRS.append(f"{i} changed junction column mid-transit")
+            for row in range(d):
+                if rowx(b, row) is not None and rowx(a, row) is None:
+                    ok = len(b) == 3 and any(abs(b[1] - jx) < 0.5 for jx in g.JCOL.values())
+                    if not ok:
+                        ERRS.append(f"{i} entered row {row} away from a junction column")
         def cowell(state):
             gg = {}
             for i, st in state.items():
@@ -165,6 +188,8 @@ def build(d, merge, rounds, distill=False):
                 st = state[i]
                 if len(st) == 2 and not isinstance(st[0], str):
                     rows_hit.add(st[1])
+                elif len(st) == 3 and st[2] in ROWY:
+                    rows_hit.add(ROWY[st[2]])
         mset = set(movers)
         for row in rows_hit:
             sa, sb = rowseq(last, row), rowseq(slot, row)
@@ -191,7 +216,8 @@ def build(d, merge, rounds, distill=False):
         return [i for i, s in slot.items() if len(s) == 2 and s[0] == x and s[1] == row]
 
     def hop(i, tx, row, cap, hi=None, badge=""):
-        x0 = slot[i][0]; step = 1 if tx > x0 else -1
+        x0 = slot[i][0] if len(slot[i]) == 2 else slot[i][1]
+        step = 1 if tx > x0 else -1
         path = sorted([x for x in g.SLOTS if (x - x0)*step > 0.5 and (tx - x)*step > 0.5],
                       key=lambda x: (x - x0)*step)
         for bx in path:
@@ -206,6 +232,34 @@ def build(d, merge, rounds, distill=False):
     def multi(assign, cap, hi=None, badge=""):
         for i, (x, row) in assign.items(): slot[i] = (x, row)
         snap(cap, hi=hi or list(assign), badge=badge)
+
+    def hop_to_channel(i, jx, row, cap, hi=None):
+        """Travel along the row to the junction column and pause in the channel
+        there, rotating through every occupied well on the way."""
+        x0 = slot[i][0] if len(slot[i]) == 2 else slot[i][1]
+        step = 1 if jx > x0 else -1
+        path = sorted([x for x in g.SLOTS if (x - x0)*step > 0.5 and (jx - x)*step > 0.5],
+                      key=lambda x: (x - x0)*step)
+        for bx in path:
+            if occ(bx, row):
+                slot[i] = (bx, row)
+                snap(cap + f" {i} merges into the occupied well on its path and the crystal rotates it through.",
+                     hi=hi or [i], badge="rotate-through")
+                if bx == g.SWX: ROT.append(len(FR) - 1)
+        slot[i] = ("J", jx, CY[row])
+        snap(cap, hi=hi or [i], badge="at the junction column")
+
+    def cross_rows(i, c, src, dst, cap, hi=None):
+        """A full junction transit: along the source row to junction column c,
+        vertically through the junction, landing in the destination row's
+        channel at the same column."""
+        hop_to_channel(i, g.JCOL[c], src, cap + f" {i} moves along its row to junction column {c}.", hi=hi)
+        slot[i] = ("J", g.JCOL[c], g.gapy(min(src, dst), max(src, dst)))
+        snap(cap + f" {i} lifts through the junction between the rows.",
+             hi=hi or [i], junc=[[c, min(src, dst)]], badge="in transit")
+        slot[i] = ("J", g.JCOL[c], CY[dst])
+        snap(cap + f" {i} arrives in the destination row's channel at the junction column.",
+             hi=hi or [i], badge="in transit")
 
     BANDW = {}
     def band_in():
@@ -232,7 +286,7 @@ def build(d, merge, rounds, distill=False):
 
     net = {l: "C%d" % l for l in SEAM}
     car = {l: "C%dB" % l for l in SEAM}
-    surv, PEND, FILEOUT = {}, {}, {}
+    surv, PEND, FILEOUT, XPEND = {}, {}, {}, {}
     def C(l): return surv[l] if (distill and l in surv) else car[l]
 
     def free_hold_bodies(l):
@@ -288,20 +342,14 @@ def build(d, merge, rounds, distill=False):
             snap(f"Round {op[1] + 1} of {op[2]}.", badge=f"round {op[1] + 1}")
         elif v == "park":
             for s, cl, well in op[1]:
-                hop(A(s), g.MX[-1], cl, f"{A(s)} idles this merge and moves to the row's end well.")
-                slot[A(s)] = ("J", g.JCOL[d - 1], g.gapy(min(cl, d - 1), min(cl, d - 1) + 1) if cl < d - 1 else CY[cl])
-                snap(f"{A(s)} lifts into the boundary junction and descends toward the bottom cell.",
-                     hi=[A(s)], junc=[[d - 1, k] for k in range(cl, d - 1)], badge="in transit")
-                slot[A(s)] = (g.PARKX[well], d - 1)
-                snap(f"{A(s)} drops into the bottom cell's spare park well.", hi=[A(s)])
+                for row2 in range(cl, d - 1):
+                    cross_rows(A(s), d - 1, row2, row2 + 1, f"Park:", hi=[A(s)])
+                hop(A(s), g.PARKX[well], d - 1, f"{A(s)} moves along the bottom row into its spare park well.", hi=[A(s)])
         elif v == "unpark":
             for s, cl, well in reversed(op[1]):
-                slot[A(s)] = ("J", g.JCOL[d - 1], g.gapy(cl, cl + 1) if cl < d - 1 else CY[cl])
-                snap(f"{A(s)} lifts out of its park well into the boundary junction.",
-                     hi=[A(s)], junc=[[d - 1, k] for k in range(cl, d - 1)], badge="in transit")
-                slot[A(s)] = (g.MX[-1], cl)
-                snap(f"{A(s)} lands back on its home row's end well.", hi=[A(s)])
-                hop(A(s), home[A(s)][0], cl, f"{A(s)} walks back to its memory home.")
+                for row2 in range(d - 1, cl, -1):
+                    cross_rows(A(s), d - 1, row2, row2 - 1, f"Unpark:", hi=[A(s)])
+                hop(A(s), home[A(s)][0], cl, f"{A(s)} walks along its home row back to its memory well.", hi=[A(s)])
 
         elif v in ("inrow","swap","xlift","xgate","xlower","xdrop","comm_out","comm_lift",
                    "comm_gate","comm_lower","comm_back","comm_arrive"):
@@ -325,27 +373,35 @@ def build(d, merge, rounds, distill=False):
                     snap(f"Step {L}: the crystal rotates and splits; {a} and {dd} have exchanged wells.", hi=[a])
             elif v == "xlift":
                 L = op[1] + 1
+                XPEND.clear()
                 for s, c, ac, tr in op[2]:
+                    hop_to_channel(A(s), g.JCOL[c], ac, f"Step {L}:", hi=[A(s)])
                     slot[A(s)] = ("J", g.JCOL[c], g.gapy(min(ac, tr), max(ac, tr)))
-                snap(f"Step {L}: cross-row ancillas lift into their junction mouths at c + 1/4.",
+                    XPEND[A(s)] = (c, ac, tr)
+                snap(f"Step {L}: the cross-row ancillas hang in their junctions at c + 1/4, between the rows.",
                      hi=[A(s) for s, *_ in op[2]], junc=[[c, min(ac, tr)] for s, c, ac, tr in op[2]], badge="in transit")
             elif v == "xgate":
                 L = op[1] + 1
                 for s, rc in op[2]:
-                    slot[A(s)] = slot[Dt(rc)]
-                snap(f"Step {L}: each drops into the neighbor row's strip well and gates its data there.",
-                     hi=[A(s) for s, _ in op[2]])
+                    c, ac, tr = XPEND[A(s)]
+                    slot[A(s)] = ("J", g.JCOL[c], CY[rc[0]])
+                    snap(f"Step {L}: {A(s)} drops into the neighbor row's channel at its junction column.",
+                         hi=[A(s)], badge="in transit")
+                    tx = slot[Dt(rc)][0]
+                    hop(A(s), tx, rc[0], f"Step {L}: {A(s)} moves along the row and joins {Dt(rc)}'s gate well; the gate fires.", hi=[A(s)])
             elif v == "xlower":
                 L = op[1] + 1
                 for s, c, ac, tr in op[2]:
+                    hop_to_channel(A(s), g.JCOL[c], tr, f"Step {L}:", hi=[A(s)])
                     slot[A(s)] = ("J", g.JCOL[c], g.gapy(min(ac, tr), max(ac, tr)))
-                snap(f"Step {L}: they lift back into their junction mouths.",
+                snap(f"Step {L}: they lift back into their junctions.",
                      hi=[A(s) for s, *_ in op[2]], junc=[[c, min(ac, tr)] for s, c, ac, tr in op[2]], badge="in transit")
             elif v == "xdrop":
                 L = op[1] + 1
                 for s, c, ac, swapped in op[2]:
-                    slot[A(s)] = (BANDW.get(A(s), g.WELL[d - 1]), ac)
-                snap(f"Step {L}: they drop back onto their own strip wells.", hi=[A(s) for s, *_ in op[2]])
+                    slot[A(s)] = ("J", g.JCOL[c], CY[ac])
+                    snap(f"Step {L}: {A(s)} drops back into its home row's channel.", hi=[A(s)], badge="in transit")
+                    hop(A(s), BANDW.get(A(s), g.WELL[d - 1]), ac, f"Step {L}: {A(s)} returns along the row to its own strip well.", hi=[A(s)])
             elif v == "comm_out":
                 L = op[1] + 1
                 for l in op[2]:
@@ -353,27 +409,33 @@ def build(d, merge, rounds, distill=False):
             elif v == "comm_lift":
                 L = op[1] + 1
                 for l in op[2]:
+                    hop_to_channel(C(l), g.JCOL[d - 1], l, f"Step {L}:", hi=[C(l)])
                     slot[C(l)] = ("J", g.JCOL[d - 1], g.gapy(l, l + 1))
-                snap(f"Step {L}: the seam ions lift into the boundary junction mouths.",
+                snap(f"Step {L}: the seam ions hang in the boundary junctions, between the rows.",
                      hi=[C(l) for l in op[2]], junc=[[d - 1, l] for l in op[2]], badge="in transit")
             elif v == "comm_gate":
                 L = op[1] + 1
                 for l, rc in op[2]:
-                    slot[C(l)] = slot[Dt(rc)]
-                snap(f"Step {L}: the seam gate fires in the strip well holding the boundary data.",
-                     hi=[C(l) for l, _ in op[2]])
+                    if len(slot[C(l)]) == 3 and rc[0] != l:
+                        slot[C(l)] = ("J", g.JCOL[d - 1], CY[rc[0]])
+                        snap(f"Step {L}: {C(l)} drops into the neighbor row's channel at the boundary junction.",
+                             hi=[C(l)], badge="in transit")
+                    tx = slot[Dt(rc)][0]
+                    hop(C(l), tx, rc[0], f"Step {L}: {C(l)} joins the boundary data's well; the seam gate fires.", hi=[C(l)])
             elif v == "comm_lower":
                 L = op[1] + 1
                 for l in op[2]:
+                    hop_to_channel(C(l), g.JCOL[d - 1], l + 1, f"Step {L}:", hi=[C(l)])
                     slot[C(l)] = ("J", g.JCOL[d - 1], g.gapy(l, l + 1))
-                snap(f"Step {L}: the seam ions lift back into the junction mouths.",
+                snap(f"Step {L}: the seam ions lift back into the junctions.",
                      hi=[C(l) for l in op[2]], junc=[[d - 1, l] for l in op[2]], badge="in transit")
             elif v == "comm_back":
                 L = op[1] + 1
                 for l in op[2]:
-                    slot[C(l)] = (g.WELL[d - 1], l)
-                    snap(f"Step {L}: the seam ion drops back onto its own strip.", hi=[C(l)])
-                    hop(C(l), g.SWX, l, f"Step {L}: it returns to the gate-end swap well.", badge="seam excursion")
+                    if len(slot[C(l)]) == 3:
+                        slot[C(l)] = ("J", g.JCOL[d - 1], CY[l])
+                        snap(f"Step {L}: the seam ion drops back into its home row's channel.", hi=[C(l)], badge="in transit")
+                    hop(C(l), g.SWX, l, f"Step {L}: it returns along the row to the gate-end swap well.", badge="seam excursion")
             elif v == "comm_arrive":
                 for l in op[2]:
                     if slot[C(l)] != (g.SWX, l):
@@ -551,18 +613,30 @@ const els={};
 for(const i in KIND){const e=document.createElement('div');e.className='ion '+KIND[i];
  e.textContent=KIND[i]=='yb'?'':i;els[i]=e;W.appendChild(e);}
 function jkey(s){return s.length==3?null:(Math.round(s[0]*10)/10)+'|'+s[1];}
-function verify(fi){const f=FR[fi];const g={};
- for(const i in f.slots){const s=f.slots[i];if(s.length==2&&typeof s[0]=='number'){const k=jkey(s);(g[k]=g[k]||[]).push(i);}}
+const CYs=CY;
+function rowx(s,r){if(s.length==2&&typeof s[0]=='number'&&s[1]==r)return s[0];
+ if(s.length==3&&s[2]==CYs[r])return s[1];return null;}
+function verify(fi){const f=FR[fi];const g={};const jp={};
+ for(const i in f.slots){const s=f.slots[i];
+  if(s.length==2&&typeof s[0]=='number'){const k=jkey(s);(g[k]=g[k]||[]).push(i);}
+  else if(s.length==3){const k=s[1]+'|'+s[2];(jp[k]=jp[k]||[]).push(i);}}
  for(const k in g){const x=parseFloat(k.split('|')[0]);
   if(CAP[x]!==undefined&&g[k].length>CAP[x])return 'capacity exceeded at x='+x;
   if(G.JCOL.some(j=>Math.abs(j-x)<1))return g[k]+' at rest on a junction column';}
+ for(const k in jp)if(jp[k].length>1)return jp[k]+' share one junction point';
  if(fi>0){const p=FR[fi-1];const share={};
   for(const fr of [p,f]){const h={};
    for(const i in fr.slots){const s=fr.slots[i];if(s.length==2&&typeof s[0]=='number'){const k=jkey(s);(h[k]=h[k]||[]).push(i);}}
    for(const k in h)for(const a of h[k])for(const b of h[k])if(a<b)share[a+'|'+b]=1;}
+  for(const i in f.slots){const a=p.slots[i],s=f.slots[i];
+   if(a.length==3&&s.length==3&&Math.abs(a[1]-s[1])>0.5)return i+' changed junction column mid-transit';
+   if(JSON.stringify(a)!=JSON.stringify(s))
+    for(let r=0;r<G.D;r++)
+     if(rowx(s,r)!==null&&rowx(a,r)===null&&!(s.length==3&&G.JCOL.some(j=>Math.abs(s[1]-j)<0.5)))
+      return i+' entered row '+r+' away from a junction column';}
   for(let r=0;r<G.D;r++){
-   const seq=fr=>Object.entries(fr.slots).filter(([i,s])=>s.length==2&&typeof s[0]=='number'&&s[1]==r)
-     .sort((a,b)=>a[1][0]-b[1][0]).map(([i])=>i);
+   const seq=fr=>Object.entries(fr.slots).map(([i,s])=>[rowx(s,r),i]).filter(([x])=>x!==null)
+     .sort((a,b)=>a[0]-b[0]).map(([x,i])=>i);
    const sa=seq(p),sb=seq(f),rk={};sb.forEach((i,k)=>rk[i]=k);
    const cm=sa.filter(i=>rk[i]!==undefined);
    for(let a=0;a<cm.length;a++)for(let b=a+1;b<cm.length;b++)
@@ -598,16 +672,40 @@ def verify(FR, g):
     errs = []
     d = g.d
     JC = set(g.JCOL.values())
+    ROWY = {g.CY[r]: r for r in range(d)}
+    def rowx(st, row):
+        if len(st) == 2 and not isinstance(st[0], str) and st[1] == row:
+            return st[0]
+        if len(st) == 3 and st[2] == g.CY[row]:
+            return st[1]
+        return None
     for fi, f in enumerate(FR):
         gg = {}
+        jpts = {}
         for i, s in f["slots"].items():
             if len(s) == 2 and not isinstance(s[0], str):
                 gg.setdefault((s[0], s[1]), []).append(i)
+            elif len(s) == 3:
+                jpts.setdefault((s[1], s[2]), []).append(i)
         for (x, row), mem in gg.items():
             if x in g.CAP and len(mem) > g.CAP[x]:
                 errs.append((fi, f"well x={round(x)} row {row} holds {len(mem)} > cap {g.CAP[x]}: {mem}"))
             if x in JC:
                 errs.append((fi, f"{mem} at REST on junction column x={round(x)}"))
+        for pt, mem in jpts.items():
+            if len(mem) > 1:
+                errs.append((fi, f"{mem} share one junction point"))
+        if fi > 0:
+            for i, s in f["slots"].items():
+                a = FR[fi - 1]["slots"][i]
+                if len(a) == 3 and len(s) == 3 and abs(a[1] - s[1]) > 0.5:
+                    errs.append((fi, f"{i} changed junction column mid-transit"))
+                if a != s:
+                    for row in range(d):
+                        if rowx(s, row) is not None and rowx(a, row) is None:
+                            ok = len(s) == 3 and any(abs(s[1] - jx) < 0.5 for jx in g.JCOL.values())
+                            if not ok:
+                                errs.append((fi, f"{i} entered row {row} away from a junction column"))
     for fi in range(1, len(FR)):
         p, f = FR[fi - 1], FR[fi]
         movers = [i for i in f["slots"] if f["slots"][i] != p["slots"][i]]
@@ -629,10 +727,11 @@ def verify(FR, g):
                 s = fr["slots"][i]
                 if len(s) == 2 and not isinstance(s[0], str):
                     rows_hit.add(s[1])
+                elif len(s) == 3 and s[2] in ROWY:
+                    rows_hit.add(ROWY[s[2]])
         for row in rows_hit:
             def seq(fr):
-                lst = [(s[0], i) for i, s in fr["slots"].items()
-                       if len(s) == 2 and not isinstance(s[0], str) and s[1] == row]
+                lst = [(x, i) for i, s in fr["slots"].items() for x in [rowx(s, row)] if x is not None]
                 return [i for _, i in sorted(lst)]
             sa, sb = seq(p), seq(f)
             rank = {i: k for k, i in enumerate(sb)}
