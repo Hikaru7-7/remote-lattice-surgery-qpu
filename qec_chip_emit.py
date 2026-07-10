@@ -10,6 +10,7 @@ for x in G["MX"]: CAPMAP[round(x,1)] = 2
 for x in G["WELL"]: CAPMAP[round(x,1)] = 4
 CAPMAP[round(G["SWX"],1)] = 3
 for x in G["PARKX"]: CAPMAP[round(x,1)] = 2
+for x in G.get("HOLDX",[]): CAPMAP[round(x,1)] = 2
 for x in G["SPX"]: CAPMAP[round(x,1)] = 2
 CAPMAP[round(G["CAVX"],1)] = 2; CAPMAP[round(G["YBX"],1)] = 1
 
@@ -18,11 +19,12 @@ html = """<!DOCTYPE html><html><head><meta charset="utf-8">
 body{background:#232320;color:#ddd;font:14px -apple-system,'Segoe UI',sans-serif;margin:0;padding:14px}
 #hdr{margin:4px 8px 10px}#hdr b{font-size:16px}
 #stage{position:relative;background:#232320;border:1px solid #3a3a36;border-radius:10px;overflow-x:auto}
-#world{position:relative;width:1330px;height:640px}
+#world{position:relative;width:1400px;height:640px}
 .zone{position:absolute;border-radius:8px;border:1px dashed #4c4c46}
 .zlbl{position:absolute;color:#8f8f86;font-size:12px}
 .well{position:absolute;width:34px;height:34px;border:1.4px solid #56564e;border-radius:9px;transform:translate(-50%,-50%)}
-.well.gate{border-color:#4a6f96}.well.swapw{border-color:#7d74c9;border-style:dashed}
+.well.gate{border-color:#4a6f96}.well.swapw{border-color:#7d74c9;border-style:dashed}.well.hold{border-color:#3f8f71;border-style:dashed}
+.held{background:#26463a;border:1.6px solid #5cc39a;color:#bfe8d4}
 .well.spam{border-color:#a2793c}.well.cav{border-color:#3f8f71}.well.park{border-color:#777}
 .jcol{position:absolute;width:0;border-left:2px dotted #5c5c54;transform:translateX(-50%)}
 .jlink{position:absolute;width:2px;background:#4c4c46;transform:translateX(-50%)}
@@ -57,7 +59,7 @@ well capacity, nothing at rest on a junction column, and no reordering along a r
 <div class="legend"><span class="lg" style="background:#2e2e2a;border:1.6px solid #9a9a90"></span>data
 <span class="lg" style="background:#3f7fd4"></span>X check <span class="lg" style="background:#c96f3b"></span>Z check
 <span class="lg" style="background:#2f8f6b"></span>comm Ba <span class="lg" style="background:#d85a30;border-radius:50%"></span>Yb coolant
-<span class="lg" style="border:1.4px dashed #7d74c9;background:none"></span>swap well
+<span class="lg" style="border:1.4px dashed #7d74c9;background:none"></span>swap well <span class="lg" style="border:1.4px dashed #3f8f71;background:none"></span>hold wells <span class="lg" style="background:#26463a;border:1.6px solid #5cc39a"></span>held half body
 <span class="lg" style="border-left:2px dotted #5c5c54;background:none;width:2px"></span>junction column &middot;
 memory homes 2d+1 &middot; gate strip: junction, well, junction, well, junction, well, swap &middot; SPAM d sites &middot; wall &middot; cavity</div>
 <script>
@@ -70,12 +72,14 @@ const CY=G.CY;
 for(const r in CY){const y=CY[r];
  zone(G.MX[0]-26,G.MX[6]+26,y,'', r=='0'?'Memory (2d+1 homes)':'');
  zone(G.JCOL[0]-22,G.WELL[2]+24,y,'', r=='0'?'Gate strip (j w j w j w)':'');
+ if(G.HOLDX)zone(G.HOLDX[0]-24,G.HOLDX[2]+24,y,'', r=='0'?'holds':'');
  zone(G.SWX-24,G.SWX+24,y,'', r=='0'?'swap':'');
  zone(G.SPX[0]-26,G.SPX[2]+26,y,'', r=='0'?'SPAM (d sites)':'');
  zone(G.CAVX-26,G.YBX+22,y,'', r=='0'?'Optical I/F':'');
  for(const x of G.MX){const w=document.createElement('div');w.className='well';w.style.left=x+'px';w.style.top=y+'px';W.appendChild(w);}
  for(const x of G.WELL){const w=document.createElement('div');w.className='well gate';w.style.left=x+'px';w.style.top=y+'px';W.appendChild(w);}
  for(const x of G.JCOL){const j=document.createElement('div');j.className='jcol';j.style.left=x+'px';j.style.top=(y-26)+'px';j.style.height='52px';W.appendChild(j);}
+ for(const x of (G.HOLDX||[])){const w=document.createElement('div');w.className='well hold';w.style.left=x+'px';w.style.top=y+'px';W.appendChild(w);}
  {const w=document.createElement('div');w.className='well swapw';w.style.left=G.SWX+'px';w.style.top=y+'px';W.appendChild(w);}
  if(r=='2'){for(const x of G.PARKX){const w=document.createElement('div');w.className='well park';w.style.left=x+'px';w.style.top=y+'px';W.appendChild(w);}}
  for(const x of G.SPX){const w=document.createElement('div');w.className='well spam';w.style.left=x+'px';w.style.top=y+'px';W.appendChild(w);}
@@ -132,8 +136,9 @@ document.addEventListener('keydown',e=>{if(e.key=='ArrowRight')show(cur+1);if(e.
 show(0);
 </script></body></html>"""
 html = html.replace("__GEOM__", json.dumps(G)).replace("__FRAMES__", json.dumps(FR)).replace("__IONS__", json.dumps(IONS)).replace("__CAP__", json.dumps({str(k):v for k,v in CAPMAP.items()}).replace('"',''))
-title = {"round":"Two local syndrome-extraction rounds, d = 3, replayed on the chapter-4 cell geometry",
-         "merge":"One two-round remote-surgery merge, d = 3, replayed on the chapter-4 cell geometry"}[MODE]
+title = {"round":"Tier 1: two local syndrome-extraction rounds, d = 3, on the chapter-4 cell geometry",
+         "merge":"Tier 2: a two-round remote-surgery merge, d = 3, on the chapter-4 cell geometry",
+         "distill":"Tier 3: the merge with double selection on the cell, d = 3, gate-end hold wells"}[MODE]
 html = html.replace("__TITLE__", title)
 open(os.path.join(HERE, f"qec_chip_sim_d3_{MODE}.html"),"w").write(html)
 print("written", len(html), "bytes")

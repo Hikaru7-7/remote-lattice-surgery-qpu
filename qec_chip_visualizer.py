@@ -26,16 +26,17 @@ MX  = [120 + k*P for k in range(7)]
 GX  = [520 + m*P for m in range(6)]
 JCOL = {0: GX[0], 1: GX[2], 2: GX[4]}
 WELL = {0: GX[1], 1: GX[3], 2: GX[5]}
-SWX = 850.0
-PARKX = [906.0]
-SPX = [980 + k*P for k in range(3)]
-WALLX = 1120.0
-CAVX = 1175.0; YBX = 1207.0
+HOLDX = [796.0, 842.0, 888.0]
+SWX = 934.0
+PARKX = [990.0]
+SPX = [1064 + k*P for k in range(3)]
+WALLX = 1210.0
+CAVX = 1264.0; YBX = 1296.0
 CY = {r: 110 + 190*r for r in range(D)}
 IW = 9.0
 def gapy(a,b): return (CY[a]+CY[b])/2
-SLOTS = MX + list(WELL.values()) + [SWX] + PARKX + SPX + [CAVX, YBX]
-CAP = {**{x:2 for x in MX}, **{x:4 for x in WELL.values()}, SWX:3,
+SLOTS = MX + list(WELL.values()) + HOLDX + [SWX] + PARKX + SPX + [CAVX, YBX]
+CAP = {**{x:2 for x in MX}, **{x:4 for x in WELL.values()}, **{x:2 for x in HOLDX}, SWX:3,
        **{x:2 for x in PARKX}, **{x:2 for x in SPX}, CAVX:2, YBX:1}
 
 ions, home = {}, {}
@@ -53,6 +54,10 @@ for r in range(D):
     if r in SEAM:
         ions["C%dB"%r] = "comm"
         home["C%dB"%r] = (SWX, r) if (len(sys.argv)<2 or sys.argv[1]!="round") else (CAVX, r)
+        if len(sys.argv)>1 and sys.argv[1]=="distill":
+            for k in range(3):
+                hid = "h%d" % (3*r+k+1)
+                ions[hid] = "held"; home[hid] = (HOLDX[k], r)
     ions["Y%d"%r] = "yb"; home["Y%d"%r] = (YBX, r)
 
 slot = {i: home[i] for i in home}          # ion -> (slot_x, row) or ("J",c,gapy)
@@ -129,15 +134,55 @@ def to_well(i, wx, row, cap, hi=None):
         hop(i, wx, row, cap, hi=hi)
 
 MODE = sys.argv[1] if len(sys.argv)>1 else "merge"
-_ops = round_ops(D, MODE=="merge", 2)
+_ops = round_ops(D, MODE in ("merge","distill"), 2)
 net = {l:"C%d"%l for l in SEAM}; car = {l:"C%dB"%l for l in SEAM}
-def C(l): return car[l]
+surv = {}
+def C(l): return surv[l] if MODE=="distill" and l in surv else car[l]
+
+def accumulate_and_distill(l, tag):
+    """One §4.3.4 batch on lane l: three heralds ferried to the gate-end hold
+    wells, then double selection in the gate wells, checks read in SPAM,
+    survivor left waiting at the swap well for the next seam round."""
+    pool = sorted([i for i in ions if ions[i]=="held" and slot[i][1]==l and slot[i][0] in HOLDX],
+                  key=lambda i: slot[i][0])
+    if len(pool) < 3:
+        snap(f"Lane {l}: hold pool short, batch skipped.", badge="finding"); return
+    for k, hh in enumerate(pool):
+        snap(f"{tag} lane {l}: the networker heralds raw pair {k} at the cavity.", hi=[net[l]], badge="herald")
+        hop(net[l], SWX, l, f"The networker carries the fresh half to the swap well.")
+        snap(f"Crystal rotation at the swap well: the carrier {car[l]} takes the half.", hi=[net[l], car[l]])
+        hop(net[l], CAVX, l, "The networker returns to the cavity and keeps attempting.")
+        hop(car[l], slot[hh][0], l, f"The carrier parks half {k} beside {hh} in a gate-end hold well, a one-hop ferry.")
+        hop(car[l], SWX, l, "The carrier returns to the swap well.")
+    sv, c1, c2 = pool[0], pool[1], pool[2]
+    hop(sv, WELL[1], l, f"{sv}, the first catch, takes the survivor's middle gate well.")
+    hop(c1, WELL[0], l, f"{c1} takes the left gate well.")
+    hop(c2, WELL[2], l, f"{c2} takes the right gate well.")
+    slot[c1] = (WELL[1], l)
+    snap(f"Bilateral CNOT one: {c1} merges with the survivor and the gate fires.", hi=[c1, sv])
+    slot[c1] = (WELL[0], l)
+    snap(f"{c1} splits back out.", hi=[c1])
+    hop(c1, SPX[0], l, f"{c1} hops into the SPAM zone and is read in Z, the bit-flip check.", badge="read Z")
+    slot[c2] = (WELL[1], l)
+    snap(f"Bilateral CNOT two: {c2} merges with the survivor while {c1} is still being read.", hi=[c2, sv])
+    slot[c2] = (WELL[2], l)
+    snap(f"{c2} splits back out and takes its basis rotation.", hi=[c2])
+    hop(c2, SPX[1], l, f"{c2} is read in X, the phase-flip check.", badge="read X")
+    snap(f"Both modules' checks agree: keep. {sv} holds the purified pair.", hi=[sv], badge="keep")
+    hop(c1, HOLDX[1], l, f"{c1} resets and returns to the hold pool.")
+    hop(c2, HOLDX[2], l, f"{c2} resets and returns to the hold pool.")
+    hop(sv, SWX, l, f"{sv} moves to the swap well, purified pair ready for the seam.")
+    surv[l] = sv
 in_band = False
 FILEOUT = {}
 for op in _ops:
     v = op[0]
     if v == "prep":
-        snap("Rest. Memory homes hold the code row" + (", the carrier waits at each active swap well, the networker and Yb sit at each cavity." if MODE=="merge" else ". The comm ions rest at their cavities; a local round asks nothing of them."), badge="chapter-4 geometry")
+        snap("Rest. Memory homes hold the code row" + (", the carrier waits at each active swap well, the networker and Yb sit at each cavity." if MODE!="round" else ". The comm ions rest at their cavities; a local round asks nothing of them."), badge="chapter-4 geometry")
+        if MODE == "distill":
+            snap("Warm-up: before round 1 each active lane distills its first batch.", badge="tier 3")
+            for l in sorted(SEAM):
+                accumulate_and_distill(l, "Warm-up")
     elif v == "round":
         snap(f"Round {op[1]+1} of 2.", badge=f"round {op[1]+1}")
     elif v == "park":
@@ -200,12 +245,12 @@ for op in _ops:
         elif v == "comm_out":
             L = op[1]+1
             for l in op[2]:
-                hop(C(l), WELL[2], l, f"Step {L}: the carrier steps from the swap well into the strip, toward its boundary data.", badge="seam excursion")
+                hop(C(l), WELL[2], l, f"Step {L}: the seam ion steps from the swap well into the strip, toward its boundary data.", badge="seam excursion")
         elif v == "comm_lift":
             L = op[1]+1
             for l in op[2]:
                 slot[C(l)] = ("J", JCOL[D-1], gapy(l,l+1))
-            snap(f"Step {L}: carriers lift into the boundary junction mouths.", hi=[C(l) for l in op[2]],
+            snap(f"Step {L}: the seam ions lift into the boundary junction mouths.", hi=[C(l) for l in op[2]],
                  junc=[[D-1,l] for l in op[2]], badge="in transit")
         elif v == "comm_gate":
             L = op[1]+1
@@ -217,14 +262,14 @@ for op in _ops:
             L = op[1]+1
             for l in op[2]:
                 slot[C(l)] = ("J", JCOL[D-1], gapy(l,l+1))
-            snap(f"Step {L}: carriers lift back into the junction mouths.", hi=[C(l) for l in op[2]],
+            snap(f"Step {L}: the seam ions lift back into the junction mouths.", hi=[C(l) for l in op[2]],
                  junc=[[D-1,l] for l in op[2]], badge="in transit")
         elif v == "comm_back":
             L = op[1]+1
             for l in op[2]:
                 slot[C(l)] = (WELL[2], l)
                 snap(f"Step {L}: the carrier drops back onto its own strip.", hi=[C(l)])
-                hop(C(l), SWX, l, f"Step {L}: it returns to the gate-end swap well.", badge="seam excursion")
+                hop(C(l), SWX, l, f"Step {L}: it returns to the gate-end swap well to wait for the round's read.", badge="seam excursion")
         elif v == "comm_arrive":
             for l in op[2]:
                 if slot[C(l)] != (SWX,l):
@@ -250,8 +295,16 @@ for op in _ops:
         snap("493 nm readout fires at the SPAM sites" + (", the seam bits read at the swap wells in the same beat." if op[2] else "."),
              hi=[A(s) for s in op[1]], badge="syndromes")
     elif v == "measure":
-        snap("The carriers are read at their swap wells. This round's Bell pairs reach module B.",
-             hi=[C(l) for l in op[1]], badge="pairs to B")
+        if MODE == "distill":
+            snap("The survivors are read at the swap wells. This round's purified pairs reach module B.",
+                 hi=[C(l) for l in op[1]], badge="purified pairs to B")
+            for l in op[1]:
+                free = [x for x in HOLDX if not occ(x,l)]
+                hop(surv[l], free[0], l, f"{surv[l]} resets and rejoins the hold pool, an empty body again.")
+                del surv[l]
+        else:
+            snap("The carriers are read at their swap wells. This round's Bell pairs reach module B.",
+                 hi=[C(l) for l in op[1]], badge="pairs to B")
     elif v == "from_spam":
         order = sorted([A(s) for s in op[1]], key=lambda i: FILEOUT[A(s)][0] if A(s) in FILEOUT else slot[i][0])
         order = sorted([A(s) for s in op[1]], key=lambda a: -FILEOUT[a][0])
@@ -277,9 +330,16 @@ for op in _ops:
             assign[i] = home[i]
         multi(assign, "Everyone is back in the memory home it started from. The round ends at rest.", badge="at rest")
     elif v == "herald":
-        snap("The networkers herald fresh Bell pairs at their cavities. Yb holds them cold.",
-             hi=[net[l] for l in op[1]], badge="herald")
+        if MODE == "distill":
+            for l in sorted(op[1]):
+                accumulate_and_distill(l, "Next batch")
+        else:
+            snap("The networkers herald fresh Bell pairs at their cavities. Yb holds them cold.",
+                 hi=[net[l] for l in op[1]], badge="herald")
     elif v == "comm_swap":
+        if MODE == "distill":
+            snap("Ping-pong roles hold: the networker keeps the cavity, the carrier keeps the ferry. The survivor pipeline replaces the raw handoff.", badge="distilled lane")
+            continue
         for l in op[1]:
             hop(net[l], SWX, l, "Ping-pong: the heralded networker crosses the wall and the SPAM row to the swap well.", badge="handoff")
             snap("The two comm ions share the swap well and the crystal rotates: roles exchange.", hi=[net[l], car[l]])
@@ -338,7 +398,7 @@ for fi,e in errs:
     print(f"  f{fi:3d}: {e}   | {FR[fi]['cap'][:60]}")
     if len(seen)>=15: break
 json.dump({"frames":FR,"ions":ions,"mode":MODE,
-           "geom":{"MX":MX,"WELL":list(WELL.values()),"JCOL":list(JCOL.values()),"SWX":SWX,
+           "geom":{"MX":MX,"WELL":list(WELL.values()),"JCOL":list(JCOL.values()),"HOLDX":HOLDX,"SWX":SWX,
                    "PARKX":PARKX,"SPX":SPX,"WALLX":WALLX,"CAVX":CAVX,"YBX":YBX,
                    "CY":CY,"P":P,"D":D}}, open(os.path.join(HERE, f"chip_frames_{MODE}.json"),"w"))
 print("json written")
