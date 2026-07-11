@@ -1254,6 +1254,156 @@ def report(d: int) -> None:
     print(f"  by kind: {t['by_kind']}")
 
 
+# ---------------------------------------------------------------------------
+# Frame-level legality: the single physical-rule authority.
+#
+# The scheduler owns the schedule AND the physical rules. The visualizer expands
+# the op list to per-frame ion positions on the pixel geometry and hands each
+# frame back here to be judged; it invents no rule of its own. `geom` is a small
+# pixel descriptor (junction columns, gate wells, read spots, optical wall,
+# per-well capacity, row y-coordinates) so the scheduler stays free of pixel
+# constants while still owning every rule. A frame is
+#   {"slots": {ion: [x, row] | ["J", x, y]}, "op"?: str, "pairs"?: [[a,b],...],
+#    "tv"?: [ions momentarily in transit]}.
+# ---------------------------------------------------------------------------
+def _rowx(st, row, CY):
+    """The x-coordinate of an ion in `row`, whether resting ([x,row]) or in a
+    junction transit (["J",x,y]); None if it is not in that row."""
+    if len(st) == 2 and not isinstance(st[0], str) and st[1] == row:
+        return st[0]
+    if len(st) == 3 and st[2] == CY[row]:
+        return st[1]
+    return None
+
+
+def per_frame_errors(f, geom, kinds=None):
+    """Every rule a single frame must satisfy on its own: well capacity (with the
+    one-over allowance for an ion rotating through), no ion at rest on a junction
+    column, a gate only in a shared gate well isolated to its pair, a read only at
+    a SPAM site or the swap well, communication ions kept out of the memory zone
+    and code ions kept in front of the optical wall, and no two ions sharing one
+    junction point."""
+    d = geom["d"]; CAP = geom["CAP"]; JC = set(geom["JCOL"])
+    GATE_WELLS = set(geom["WELL"]); READ_SPOTS = set(geom["SPX"]) | {geom["SWX"]}
+    WALLX = geom["WALLX"]
+    out = []
+    slots = f["slots"]
+    gg, jpts = {}, {}
+    for i, s in slots.items():
+        if len(s) == 2 and not isinstance(s[0], str):
+            gg.setdefault((s[0], s[1]), []).append(i)
+        elif len(s) == 3:
+            jpts.setdefault((s[1], s[2]), []).append(i)
+    tvs = set(f.get("tv") or [])
+    for (x, row), mem in gg.items():
+        over = len(mem) - CAP.get(x, 99)
+        if x in CAP and over > min(1, sum(1 for m in mem if m in tvs)):
+            out.append(f"well x={round(x)} row {row} holds {len(mem)} > cap {CAP[x]}: {mem}")
+        if x in JC:
+            out.append(f"{mem} at REST on junction column x={round(x)}")
+    if f.get("op") == "gate":
+        for a, b in f.get("pairs", []):
+            sa = slots[a]
+            if slots[a] != slots[b] or len(sa) != 2 or sa[0] not in GATE_WELLS:
+                out.append(f"gate on {a},{b} outside a shared gate well")
+            else:
+                n = sum(1 for _i, s2 in slots.items() if s2 == sa)
+                if n != 2:
+                    out.append(f"gate on {a},{b} not isolated to the pair ({n} in well)")
+    if f.get("op") == "read":
+        for pr in f.get("pairs", []):
+            si = slots[pr[0]]
+            if len(si) != 2 or si[0] not in READ_SPOTS:
+                out.append(f"read of {pr[0]} away from a SPAM site or the swap well")
+    if kinds:
+        for i, s2 in slots.items():
+            if len(s2) != 2 or isinstance(s2[0], str):
+                continue
+            if kinds[i] in ("comm", "held") and s2[0] < min(JC) - 1:
+                out.append(f"communication-region ion {i} entered the memory zone")
+            if kinds[i] in ("data", "X", "Z") and s2[0] > WALLX:
+                out.append(f"code ion {i} crossed the optical wall")
+    for _pt, mem in jpts.items():
+        if len(mem) > 1:
+            out.append(f"{mem} share one junction point")
+    return out
+
+
+def pair_errors(prev, cur, geom):
+    """Rules that compare a frame with the one before it: an ion never changes
+    junction column mid-transit, never enters a row except through a junction
+    column, and never passes another ion along a row without the two first
+    sharing a well (a crystal rotation)."""
+    d = geom["d"]; CY = geom["CY"]; JCOL = geom["JCOL"]
+    ROWY = {CY[r]: r for r in range(d)}
+    out = []
+    ps, cs = prev["slots"], cur["slots"]
+    for i, s in cs.items():
+        a = ps.get(i)
+        if a is None:
+            continue
+        if len(a) == 3 and len(s) == 3 and abs(a[1] - s[1]) > 0.5:
+            out.append(f"{i} changed junction column mid-transit")
+        if a != s:
+            for row in range(d):
+                if _rowx(s, row, CY) is not None and _rowx(a, row, CY) is None:
+                    ok = len(s) == 3 and any(abs(s[1] - jx) < 0.5 for jx in JCOL)
+                    if not ok:
+                        out.append(f"{i} entered row {row} away from a junction column")
+    movers = [i for i in cs if i in ps and cs[i] != ps[i]]
+    if not movers:
+        return out
+    share = set()
+    for fr in (ps, cs):
+        gg = {}
+        for i, s in fr.items():
+            if len(s) == 2 and not isinstance(s[0], str):
+                gg.setdefault((s[0], s[1]), []).append(i)
+        for mem in gg.values():
+            for a in mem:
+                for b in mem:
+                    if a < b:
+                        share.add((a, b))
+    rows_hit = set()
+    for i in movers:
+        for fr in (ps, cs):
+            s = fr[i]
+            if len(s) == 2 and not isinstance(s[0], str):
+                rows_hit.add(s[1])
+            elif len(s) == 3 and s[2] in ROWY:
+                rows_hit.add(ROWY[s[2]])
+    mset = set(movers)
+    for row in rows_hit:
+        def seq(fr):
+            lst = [(x, i) for i, s in fr.items() for x in [_rowx(s, row, CY)] if x is not None]
+            return [i for _, i in sorted(lst)]
+        sa, sb = seq(ps), seq(cs)
+        rank = {i: k for k, i in enumerate(sb)}
+        common = [i for i in sa if i in rank]
+        for ii in range(len(common)):
+            for jj in range(ii + 1, len(common)):
+                a, b = common[ii], common[jj]
+                if (a in mset or b in mset) and rank[a] > rank[b] and (min(a, b), max(a, b)) not in share:
+                    out.append(f"row {row}: {a} passed {b} with no shared well")
+    return out
+
+
+def frame_errors(frames, geom, kinds=None):
+    """The single legality pass over a whole schedule's frames. Returns a list of
+    (frame_index, message) for every violation, empty when the schedule is legal.
+    The visualizer -- both its build-time pass and the live per-frame line in each
+    page -- calls this and adds no independent rule, so one program owns the
+    schedule and the rules together."""
+    out = []
+    for fi, f in enumerate(frames):
+        for m in per_frame_errors(f, geom, kinds):
+            out.append((fi, m))
+        if fi > 0:
+            for m in pair_errors(frames[fi - 1], f, geom):
+                out.append((fi, m))
+    return out
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:

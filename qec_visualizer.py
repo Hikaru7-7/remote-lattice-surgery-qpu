@@ -14,9 +14,10 @@ Three families, at every odd distance:
                      the spent survivor recycled at the read to catch the
                      third, double selection at the boundary.
 
-A strict verifier runs on every frame, in Python here and again live in the
-page: well occupancy within capacity, no ion at rest on a junction column,
-and no reordering along a row without a shared-well crystal rotation.
+The scheduler's frame_errors legality check runs on every frame, at build time
+and precomputed into each page's live line, so the page reflects the scheduler
+and adds no rule of its own: well occupancy within capacity, no rest on a
+junction column, and no reordering along a row without a shared-well rotation.
 Run:  python3 qec_visualizer.py            # d = 3 and 5
       python3 qec_visualizer.py 7          # one distance
       python3 qec_visualizer.py all        # the thesis sweep, 3..27
@@ -26,6 +27,7 @@ import json, math, sys, os
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from qec_scheduler import build_stabilizers, place, stab_cell, num, seam_schedule, round_ops, parallel_steps
+import qec_scheduler as S
 
 MERGE_ROUNDS = 2
 NAMES3 = {frozenset({1,2,4,5}):"A1", frozenset({2,3,5,6}):"A2",
@@ -71,6 +73,14 @@ class G:
                     **{x2: 2 for x2 in self.PARKX},
                     **{x2: 2 for x2 in self.SPX}, self.CAVX: 2, self.YBX: 1}
     def gapy(self, a, b): return (self.CY[a] + self.CY[b]) / 2
+    def rule_geom(self):
+        """The pixel descriptor the scheduler's frame_errors reads, so the
+        physical rules live in the scheduler and this class only supplies
+        coordinates."""
+        return {"d": self.d, "JCOL": list(self.JCOL.values()),
+                "CY": {r: self.CY[r] for r in range(self.d)}, "CAP": dict(self.CAP),
+                "WELL": list(self.WELL.values()), "SPX": list(self.SPX),
+                "SWX": self.SWX, "WALLX": self.WALLX}
 
 
 CHECK_ONLY = False
@@ -139,108 +149,26 @@ def build(d, merge, rounds, distill=False):
                 posr[i] = [round(x + off, 1), CY[row]]
         return posr
 
-    JC = set(g.JCOL.values())
-    last = {i: slot[i] for i in slot}
     ERRS = []
-    GATE_WELLS = set(g.WELL.values())
-    READ_SPOTS = set(g.SPX) | {g.SWX}
-
-    def _zone_check(op=None, pairs=None):
-        if op == "gate" and pairs:
-            for a, b in pairs:
-                sa, sb = slot[a], slot[b]
-                if sa != sb or len(sa) != 2 or sa[0] not in GATE_WELLS:
-                    ERRS.append((len(FR), f"gate on {a},{b} outside a shared gate well"))
-                elif len(occ(sa[0], sa[1])) != 2:
-                    ERRS.append((len(FR), f"gate on {a},{b} in a well not isolated to the pair"))
-        if op == "read" and pairs:
-            for (i,) in pairs:
-                si = slot[i]
-                if len(si) != 2 or si[0] not in READ_SPOTS:
-                    ERRS.append((len(FR), f"read of {i} away from a SPAM site or the swap well"))
-        for i, st in slot.items():
-            if len(st) != 2 or isinstance(st[0], str):
-                continue
-            x, row = st
-            if ions[i] in ("comm", "held") and x < g.JCOL[0] - 1:
-                ERRS.append((len(FR), f"communication-region ion {i} entered the memory zone"))
-            if ions[i] in ("data", "X", "Z") and x > g.WALLX:
-                ERRS.append((len(FR), f"code ion {i} crossed the optical wall"))
-
-    ROWY = {CY[r]: r for r in range(d)}
+    RULEGEOM = g.rule_geom()
+    _last_frame = [None]
 
     def _inc_check(op=None, pairs=None, tv=None):
-        _zone_check(op, pairs)
-        pass
-        movers = [i for i in slot if slot[i] != last[i]]
-        if not movers:
-            return
-        def rowx(st, row):
-            if len(st) == 2 and not isinstance(st[0], str) and st[1] == row:
-                return st[0]
-            if len(st) == 3 and st[2] == CY[row]:
-                return st[1]
-            return None
-        def rowseq(state, row):
-            lst = [(x, i) for i, st in state.items() for x in [rowx(st, row)] if x is not None]
-            return [i for _, i in sorted(lst)]
-        jpts = {}
-        for i, st in slot.items():
-            if len(st) == 3:
-                jpts.setdefault((st[1], st[2]), []).append(i)
-        for pt, mem in jpts.items():
-            if len(mem) > 1 and any(m in movers for m in mem):
-                ERRS.append((len(FR), f"{mem} share one junction point at x={round(pt[0])}"))
-        for i in movers:
-            a, b = last[i], slot[i]
-            if len(a) == 3 and len(b) == 3 and abs(a[1] - b[1]) > 0.5:
-                ERRS.append((len(FR), f"{i} changed junction column mid-transit"))
-            for row in range(d):
-                if rowx(b, row) is not None and rowx(a, row) is None:
-                    ok = len(b) == 3 and any(abs(b[1] - jx) < 0.5 for jx in g.JCOL.values())
-                    if not ok:
-                        ERRS.append((len(FR), f"{i} entered row {row} away from a junction column"))
-        def cowell(state):
-            gg = {}
-            for i, st in state.items():
-                if len(st) == 2 and not isinstance(st[0], str):
-                    gg.setdefault((st[0], st[1]), []).append(i)
-            return gg
-        cur = cowell(slot); prev = cowell(last)
-        share = set()
-        for gg in (cur, prev):
-            for mem in gg.values():
-                for a in mem:
-                    for b in mem:
-                        if a < b: share.add((a, b))
-        tvs = set(TRANSIT) | ({tv} if tv else set())
-        for (x, row), mem in cur.items():
-            if any(m in mem for m in movers):
-                over = len(mem) - g.CAP.get(x, 99)
-                if x in g.CAP and over > min(1, sum(1 for m in mem if m in tvs)):
-                    ERRS.append((len(FR), f"well x={round(x)} row {row} holds {len(mem)} > cap {g.CAP[x]}"))
-                if x in JC:
-                    ERRS.append((len(FR), f"{mem} at REST on junction column x={round(x)}"))
-        rows_hit = set()
-        for i in movers:
-            for state in (slot, last):
-                st = state[i]
-                if len(st) == 2 and not isinstance(st[0], str):
-                    rows_hit.add(st[1])
-                elif len(st) == 3 and st[2] in ROWY:
-                    rows_hit.add(ROWY[st[2]])
-        mset = set(movers)
-        for row in rows_hit:
-            sa, sb = rowseq(last, row), rowseq(slot, row)
-            rank = {i: k for k, i in enumerate(sb)}
-            common = [i for i in sa if i in rank]
-            for ii in range(len(common)):
-                for jj in range(ii + 1, len(common)):
-                    a, b = common[ii], common[jj]
-                    if (a in mset or b in mset) and rank[a] > rank[b] and (min(a, b), max(a, b)) not in share:
-                        ERRS.append((len(FR), f"row {row}: {a} passed {b} with no shared well"))
-        for i in movers:
-            last[i] = slot[i]
+        # Reflect the scheduler's rules on the current frame (streaming, so the
+        # big sweep keeps only the previous frame in memory).
+        fs = {i: (list(slot[i]) if len(slot[i]) == 3 else [slot[i][0], slot[i][1]]) for i in slot}
+        f = {"slots": fs}
+        if op: f["op"] = op
+        if pairs: f["pairs"] = [sorted(pp) for pp in pairs]
+        tvs = sorted(TRANSIT | ({tv} if tv else set()))
+        if tvs: f["tv"] = tvs
+        fi = len(FR)
+        for m in S.per_frame_errors(f, RULEGEOM, ions):
+            ERRS.append((fi, m))
+        if _last_frame[0] is not None:
+            for m in S.pair_errors(_last_frame[0], f, RULEGEOM):
+                ERRS.append((fi, m))
+        _last_frame[0] = f
 
     def snap(cap, hi=None, junc=None, badge="", op=None, pairs=None, tv=None):
         if CHECK_ONLY:
@@ -687,7 +615,7 @@ button:hover{background:#3d3d38}input[type=range]{flex:1}
 .lg{display:inline-block;width:13px;height:13px;border-radius:4px;vertical-align:-2px;margin:0 4px 0 12px}
 </style></head><body>
 <div id="hdr"><b>__TITLE__</b><br><span class="sub">__SUB__
-A strict verifier runs live on every frame: well capacity, junction columns clear of resting ions, and no passing without a shared-well crystal rotation.</span></div>
+The scheduler's own legality check is shown live on every frame: well capacity, junction columns clear of resting ions, and no passing without a shared-well crystal rotation.</span></div>
 <div id="stage"><div id="world"></div></div>
 <div id="cap"></div><div id="verify"></div>
 <div id="bar"><button id="b0">&#9198;</button><button id="bp">&#9664;</button><button id="pl">Play</button>
@@ -703,7 +631,7 @@ A strict verifier runs live on every frame: well capacity, junction columns clea
 <span class="lg" style="border-left:2px dotted #5c5c54;background:none;width:2px"></span>junction column &middot;
 memory homes 2d+1 &middot; strip: junction, well alternating, then holds and swap &middot; SPAM d sites &middot; wall &middot; cavity</div>
 <script>
-const G=__GEOM__, FR=__FRAMES__, KIND=__IONS__, CAP=__CAP__;
+const G=__GEOM__, FR=__FRAMES__, KIND=__IONS__, CAP=__CAP__, VERDICTS=__VERDICTS__;
 const W=document.getElementById('world');
 const CY=Object.keys(G.CY).map(k=>G.CY[k]);
 W.style.width=(G.YBX+80)+'px';W.style.height=(CY[CY.length-1]+90)+'px';
@@ -738,33 +666,7 @@ function jkey(s){return s.length==3?null:(Math.round(s[0]*10)/10)+'|'+s[1];}
 const CYs=CY;
 function rowx(s,r){if(s.length==2&&typeof s[0]=='number'&&s[1]==r)return s[0];
  if(s.length==3&&s[2]==CYs[r])return s[1];return null;}
-function verify(fi){const f=FR[fi];const g={};const jp={};
- for(const i in f.slots){const s=f.slots[i];
-  if(s.length==2&&typeof s[0]=='number'){const k=jkey(s);(g[k]=g[k]||[]).push(i);}
-  else if(s.length==3){const k=s[1]+'|'+s[2];(jp[k]=jp[k]||[]).push(i);}}
- for(const k in g){const x=parseFloat(k.split('|')[0]);
-  if(CAP[x]!==undefined&&g[k].length>CAP[x])return 'capacity exceeded at x='+x;
-  if(G.JCOL.some(j=>Math.abs(j-x)<1))return g[k]+' at rest on a junction column';}
- for(const k in jp)if(jp[k].length>1)return jp[k]+' share one junction point';
- if(fi>0){const p=FR[fi-1];const share={};
-  for(const fr of [p,f]){const h={};
-   for(const i in fr.slots){const s=fr.slots[i];if(s.length==2&&typeof s[0]=='number'){const k=jkey(s);(h[k]=h[k]||[]).push(i);}}
-   for(const k in h)for(const a of h[k])for(const b of h[k])if(a<b)share[a+'|'+b]=1;}
-  for(const i in f.slots){const a=p.slots[i],s=f.slots[i];
-   if(a.length==3&&s.length==3&&Math.abs(a[1]-s[1])>0.5)return i+' changed junction column mid-transit';
-   if(JSON.stringify(a)!=JSON.stringify(s))
-    for(let r=0;r<G.D;r++)
-     if(rowx(s,r)!==null&&rowx(a,r)===null&&!(s.length==3&&G.JCOL.some(j=>Math.abs(s[1]-j)<0.5)))
-      return i+' entered row '+r+' away from a junction column';}
-  for(let r=0;r<G.D;r++){
-   const seq=fr=>Object.entries(fr.slots).map(([i,s])=>[rowx(s,r),i]).filter(([x])=>x!==null)
-     .sort((a,b)=>a[0]-b[0]).map(([x,i])=>i);
-   const sa=seq(p),sb=seq(f),rk={};sb.forEach((i,k)=>rk[i]=k);
-   const cm=sa.filter(i=>rk[i]!==undefined);
-   for(let a=0;a<cm.length;a++)for(let b=a+1;b<cm.length;b++)
-    if(rk[cm[a]]>rk[cm[b]]&&!share[[cm[a],cm[b]].sort().join('|')])
-     return cm[a]+' passed '+cm[b]+' with no shared well (row '+r+')';}}
- return null;}
+function verify(fi){return VERDICTS[fi];}  // the scheduler's per-frame verdict, precomputed
 let cur=0,timer=null;
 const cap=document.getElementById('cap'),ver=document.getElementById('verify'),
  sl=document.getElementById('sl'),ctr=document.getElementById('ctr');
@@ -791,106 +693,10 @@ show(0);
 
 
 def verify(FR, g, kinds=None):
-    errs = []
-    d = g.d
-    JC = set(g.JCOL.values())
-    ROWY = {g.CY[r]: r for r in range(d)}
-    GATE_WELLS = set(g.WELL.values())
-    READ_SPOTS = set(g.SPX) | {g.SWX}
-    def rowx(st, row):
-        if len(st) == 2 and not isinstance(st[0], str) and st[1] == row:
-            return st[0]
-        if len(st) == 3 and st[2] == g.CY[row]:
-            return st[1]
-        return None
-    for fi, f in enumerate(FR):
-        gg = {}
-        jpts = {}
-        for i, s in f["slots"].items():
-            if len(s) == 2 and not isinstance(s[0], str):
-                gg.setdefault((s[0], s[1]), []).append(i)
-            elif len(s) == 3:
-                jpts.setdefault((s[1], s[2]), []).append(i)
-        tvs = set(f.get("tv") or [])
-        for (x, row), mem in gg.items():
-            over = len(mem) - g.CAP.get(x, 99)
-            if x in g.CAP and over > min(1, sum(1 for m in mem if m in tvs)):
-                errs.append((fi, f"well x={round(x)} row {row} holds {len(mem)} > cap {g.CAP[x]}: {mem}"))
-            if x in JC:
-                errs.append((fi, f"{mem} at REST on junction column x={round(x)}"))
-        if f.get("op") == "gate":
-            for a, b in f.get("pairs", []):
-                sa, sb = f["slots"][a], f["slots"][b]
-                if sa != sb or len(sa) != 2 or sa[0] not in GATE_WELLS:
-                    errs.append((fi, f"gate on {a},{b} outside a shared gate well"))
-                else:
-                    n = sum(1 for i, s2 in f["slots"].items() if s2 == sa)
-                    if n != 2:
-                        errs.append((fi, f"gate on {a},{b} not isolated to the pair ({n} in well)"))
-        if f.get("op") == "read":
-            for pr in f.get("pairs", []):
-                si = f["slots"][pr[0]]
-                if len(si) != 2 or si[0] not in READ_SPOTS:
-                    errs.append((fi, f"read of {pr[0]} away from a SPAM site or the swap well"))
-        if kinds:
-            for i, s2 in f["slots"].items():
-                if len(s2) != 2 or isinstance(s2[0], str):
-                    continue
-                if kinds[i] in ("comm", "held") and s2[0] < min(JC) - 1:
-                    errs.append((fi, f"communication-region ion {i} entered the memory zone"))
-                if kinds[i] in ("data", "X", "Z") and s2[0] > g.WALLX:
-                    errs.append((fi, f"code ion {i} crossed the optical wall"))
-        for pt, mem in jpts.items():
-            if len(mem) > 1:
-                errs.append((fi, f"{mem} share one junction point"))
-        if fi > 0:
-            for i, s in f["slots"].items():
-                a = FR[fi - 1]["slots"][i]
-                if len(a) == 3 and len(s) == 3 and abs(a[1] - s[1]) > 0.5:
-                    errs.append((fi, f"{i} changed junction column mid-transit"))
-                if a != s:
-                    for row in range(d):
-                        if rowx(s, row) is not None and rowx(a, row) is None:
-                            ok = len(s) == 3 and any(abs(s[1] - jx) < 0.5 for jx in g.JCOL.values())
-                            if not ok:
-                                errs.append((fi, f"{i} entered row {row} away from a junction column"))
-    for fi in range(1, len(FR)):
-        p, f = FR[fi - 1], FR[fi]
-        movers = [i for i in f["slots"] if f["slots"][i] != p["slots"][i]]
-        if not movers:
-            continue
-        share = set()
-        for fr in (p, f):
-            gg = {}
-            for i, s in fr["slots"].items():
-                if len(s) == 2 and not isinstance(s[0], str):
-                    gg.setdefault((s[0], s[1]), []).append(i)
-            for mem in gg.values():
-                for a in mem:
-                    for b in mem:
-                        if a < b: share.add((a, b))
-        rows_hit = set()
-        for i in movers:
-            for fr in (p, f):
-                s = fr["slots"][i]
-                if len(s) == 2 and not isinstance(s[0], str):
-                    rows_hit.add(s[1])
-                elif len(s) == 3 and s[2] in ROWY:
-                    rows_hit.add(ROWY[s[2]])
-        for row in rows_hit:
-            def seq(fr):
-                lst = [(x, i) for i, s in fr["slots"].items() for x in [rowx(s, row)] if x is not None]
-                return [i for _, i in sorted(lst)]
-            sa, sb = seq(p), seq(f)
-            rank = {i: k for k, i in enumerate(sb)}
-            common = [i for i in sa if i in rank]
-            mset = set(movers)
-            for ii in range(len(common)):
-                for jj in range(ii + 1, len(common)):
-                    a, b = common[ii], common[jj]
-                    if (a in mset or b in mset) and rank[a] > rank[b] and (min(a, b), max(a, b)) not in share:
-                        errs.append((fi, f"row {row}: {a} passed {b} with no shared well"))
-    return errs
+    """Reflects the scheduler's single legality pass. The rules live in
+    qec_scheduler.frame_errors; the visualizer only supplies the pixel
+    descriptor and adds no rule of its own."""
+    return S.frame_errors(FR, g.rule_geom(), kinds)
 
 
 def write_html(path, d, merge, rounds, distill, FR, ions, g):
@@ -899,6 +705,10 @@ def write_html(path, d, merge, rounds, distill, FR, ions, g):
             "PARKX": g.PARKX if merge else [], "SPX": g.SPX, "WALLX": g.WALLX,
             "CAVX": g.CAVX, "YBX": g.YBX, "CY": {str(r): g.CY[r] for r in range(d)}, "P": P, "D": d}
     capmap = {str(round(k, 1)): v for k, v in g.CAP.items()}
+    verdicts = [None] * len(FR)
+    for _fi, _msg in S.frame_errors(FR, g.rule_geom(), ions):
+        if verdicts[_fi] is None:
+            verdicts[_fi] = _msg
     if distill:
         title = f"Distance-{d} merge with double selection on the chip geometry, {rounds} rounds"
         sub = ("The distilled lane of thesis Section 4.3.4 on the full cell layout: two halves ferried to the "
@@ -915,6 +725,7 @@ def write_html(path, d, merge, rounds, distill, FR, ions, g):
     html = TEMPLATE.replace("__TITLE__", title).replace("__SUB__", sub)
     html = html.replace("__GEOM__", json.dumps(geom)).replace("__FRAMES__", json.dumps(FR))
     html = html.replace("__IONS__", json.dumps(ions)).replace("__CAP__", json.dumps(capmap))
+    html = html.replace("__VERDICTS__", json.dumps(verdicts))
     with open(path, "w") as fh:
         fh.write(html)
 

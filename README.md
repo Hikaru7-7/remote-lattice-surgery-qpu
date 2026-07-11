@@ -68,7 +68,7 @@ in the thesis is exactly what the command shows. One distance at a time is
 | `qec_inject_stim.py` | Circuit-level error injection with Stim and PyMatching. Measures the merge's time-like logical error, the seam factor `1.8^((d+1)/2)` (about 11 at d = 7), and its recovery by one distance step. Uses `numpy`, `stim`, `pymatching`. |
 | `qec_inject_stim_hw.py` | The same circuit-level measurement pinned to the demonstrated per-operation error rates. Uses `numpy`, `stim`, `pymatching`. |
 | `CIRCUIT_LEVEL_RESULTS.md` | The captured output of the circuit-level runs, tabulated for cross-checking against thesis Sections 5.3 and 7.2. |
-| `qec_visualizer.py` | Replays the scheduler's operation list, unchanged, on the full Chapter-4 cell geometry: the 2d+1 memory homes, the gate strip with its junction columns, gate wells, hold wells, and swap well, the SPAM sites, the wall, and the cavities, one cell per code row. A strict verifier runs on every frame, in Python at build time and again live in each page, written independently of the scheduler's checks: well occupancy within capacity, no ion at rest on a junction column, and no reordering along a row without a shared-well crystal rotation. |
+| `qec_visualizer.py` | Replays the scheduler's operation list, unchanged, on the full Chapter-4 cell geometry: the 2d+1 memory homes, the gate strip with its junction columns, gate wells, hold wells, and swap well, the SPAM sites, the wall, and the cavities, one cell per code row. The scheduler's `frame_errors` legality check runs on every frame, at build time and precomputed into each page's live line, so the visualizer reflects the scheduler and adds no rule of its own: well occupancy within capacity, no ion at rest on a junction column, and no reordering along a row without a shared-well crystal rotation. |
 | `qec_round_sim_d{3,5,7}.html` | One local error-correction round at that distance, on the chip geometry. |
 | `qec_merge_full_sim_d{3,5,7}.html` | Two rounds of the remote lattice-surgery merge, the seam walked by the comm ions. The full d-round merge is packed and certified in the scheduler. |
 | `qec_merge_distill_sim_d{3,5,7}.html` | The same merge on the distilled lane, thesis Section 4.3.4: two halves ferried to the gate-end hold wells during the round, the spent survivor recycled at the read to catch the third, double selection at the boundary. Op order from `qec_distill.py`. |
@@ -98,8 +98,8 @@ vertical only at a junction column. Occupancy law: one ion rests per well,
 gates fire on isolated pairs, parking in the gate strip reaches three, one
 passing transit may briefly make four (the transport crystals of Pino et al.
 2021), and the swap well never exceeds its resident pair. The
-check is computed in the page, on the frame being shown, so the reader can see
-it pass rather than take it on trust. The capacities are the design's own:
+verdict is the scheduler's own, computed per frame and shipped to the page, so
+the reader can see it pass rather than take it on trust. The capacities are the design's own:
 one ion rests per well, gates and swaps merge pairs, a gate well carries at
 most the four-ion crystal of thesis Table 4.1, and a swap well carries three
 where the distilled lane's survivor waits beside the ping-pong pair. The
@@ -124,8 +124,8 @@ column, a shared junction point, and a mid-transit column switch, and
 requires the verifier to refuse each one. A rule without a failing test is
 a blind spot waiting to happen.
 
-Each row pairs the scheduler's own checks with the visualizer's independent
-frame check at one distance. Local round steps are exactly `22 + 2d` at every
+Each row runs the scheduler's named checks and its per-frame legality pass
+(`frame_errors`) over the visualizer's frames at one distance. Local round steps are exactly `22 + 2d` at every
 distance, and no frame at any distance produces a finding: capacities hold,
 junction columns stay clear, and nothing passes without a rotation. The d = 3
 row runs one extra check, the hand-verified reference comparison.
@@ -169,9 +169,10 @@ rules. The command reprints this table in a few minutes of CPU.
 ## Design contract
 
 The scheduler owns the schedule. What happens, in what order, with what motion,
-is decided in `qec_scheduler.py` and certified there. The visualizer draws that
-list and adds nothing. It rejects any operation it does not have a renderer
-for, and its frame-by-frame overlap test is an independent second check.
+is decided in `qec_scheduler.py` and certified there. The visualizer expands that op list to per-frame ion positions and hands each
+frame to `qec_scheduler.frame_errors`; it draws the schedule and reflects that
+verdict, adding no rule of its own. It still rejects any operation it has no
+renderer for.
 
 ## The circuit-level layer
 
