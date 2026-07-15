@@ -130,7 +130,9 @@ def eta_int(k):
     return P_INIT * eta_emit(c_eff(FINESSE[k])) * ETA_OUT[k] * ETA_FIBER[k]
 
 
-# Interface-owned errors, from the demonstration-anchored budget: p_ip =
+# Interface-owned errors, ASSUMED budgets anchored to the demonstrated
+# ladder, not derived from the mirror inputs (hunt [H3]; birefringence and
+# two-device distinguishability are measurable only on a built pair): p_ip =
 # polarization mixing at source and collection, p_ind = residual
 # distinguishability. V = 1 - 2 p_ind. Chain and wait are priced in ch5.
 P_IP = (0.040, 0.020, 0.005)
