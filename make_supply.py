@@ -240,13 +240,21 @@ if __name__ == "__main__":
         ln100 = math.log(100.0)
         CHAIN = (0.34, 0.60, 0.75)             # eta_chain, thesis Table 5.1
         print(f"\nverdict preview at d={d} (99% form, per matching bracket):")
+        margins = []
         for k, name in enumerate(BRACKETS):
-            t_round = T.schedule_time_us(d, merge=False, rounds=1, k=2-k)
-            N = t_round / T_ATT_US[k]
+            # the ch5 demand window: one amortized merge round, T_merge/d
+            t_window = T.merge_window_us(d, 2 - k)
+            N = t_window / T_ATT_US[k]
             p = 0.5 * (eta_int(k) * CHAIN[k]) ** 2
             need = ln100 / N
             verdict = "meets" if p >= need else "misses"
-            print(f"  {name:14s} p = {p:.2e} vs needed {need:.2e}  "
-                  f"-> {verdict} the rate ({p/need:5.2f}x)")
+            margins.append(p / need)
+            print(f"  {name:14s} N = {N:5.0f}  p = {p:.2e} vs needed {need:.2e}"
+                  f"  -> {verdict} the rate ({p/need:6.2f}x)")
+        # the numbers quoted in thesis Table ch6_scenarios and Section 6.3.2
+        assert abs(T.merge_window_us(d, 1) / T_ATT_US[1] - 13947) < 1
+        assert 42.0 < 1 / margins[0] < 44.0          # "one forty-third"
+        assert abs(margins[1] - 36.3) < 0.3          # 36x, pN = 167
+        assert abs(margins[2] - 132.5) < 1.0         # quoted 133x
     except ImportError:
         print("\n(qec_timing not on path; verdict preview skipped)")
