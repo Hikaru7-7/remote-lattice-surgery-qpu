@@ -99,22 +99,6 @@ if __name__ == "__main__":
           f"-> {eta99_base*math.sqrt(factor):.1f}% (99% form)")
     assert 7.5 < eta99_base * math.sqrt(factor) < 9.5
 
-    # ---- ch7: distillation-based estimation (Distimation) --------------
-    # The accept/reject statistics of double selection estimate the pair
-    # error for free: P_acc ~ (1-eps)^2, so an estimator from n triples has
-    # d_eps = sqrt(P(1-P)/n) / |dP/deps|, |dP/deps| = 2(1-eps).
-    # (Yokomori et al., IEEE QCE 2025, arXiv:2504.18141)
-    eps_b = 0.06
-    P_acc = (1 - eps_b) ** 2
-    dPde = 2 * (1 - eps_b)
-    triples_s = T.demand_rate_per_s(7, 1) / 3.0   # baseline link rate / 3
-    n_1e3 = P_acc * (1 - P_acc) / (1e-3 * dPde) ** 2
-    t_1e3 = n_1e3 / triples_s
-    print(f"\nDistimation: P_acc {P_acc:.3f}, {triples_s:.0f} triples/s ->")
-    print(f"  pair error pinned to +-1e-3 in {n_1e3:.0f} triples "
-          f"= {t_1e3:.0f} s of baseline operation")
-    assert 25000 < n_1e3 < 33000 and 140 < t_1e3 < 210
-
     # ---- ch7 (discussion): the simple-distillation floor ---------------
     # Simple protocols floor near 10 p_loc (Campbell 2007; Krastanov 2019).
     # With the charged operations (make_fidelity.COMM_OPS), the seam ratio
