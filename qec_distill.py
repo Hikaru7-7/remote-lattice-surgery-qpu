@@ -3,7 +3,7 @@
 remote seam pairs (thesis Section 7.3).
 
 Distillation is LOCAL to each module and does not grow with the code distance:
-one fixed circuit per distilling lane, d-1 lanes in parallel. Double selection
+one fixed circuit per distilling lane, d lanes in parallel. Double selection
 takes THREE raw Bell pairs and yields ONE purified pair, kept iff two parity
 checks agree (success ~ (1-eps)^2, about 88% at the baseline 6% raw error).
 
@@ -16,7 +16,9 @@ multiplier (make_requirement), so the geometric scheduler stays branch-free.
 Ion budget, one distilling lane, one module (peak):
   N   networker  -- generates raw pairs at the cavity (ping-pong, Section 4.2)
   K   carrier    -- ping-pong partner, ferries each delivered half
-  H0  survivor   -- the kept half; the two CNOTs target it; never measured
+  H0  survivor   -- the kept half; only ever a CONTROL of the two CNOTs
+                    (both target the first ancilla; no bit error can copy
+                    back onto it); never measured
   H1  ancilla-1  -- sacrificed, first parity check
   H2  ancilla-2  -- sacrificed, second parity check
 Five comm-region Ba+ per distilling lane against two for a raw lane. During

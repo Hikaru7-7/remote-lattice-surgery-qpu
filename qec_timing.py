@@ -293,11 +293,20 @@ def phase_times_us(d: int, k: int = 1) -> dict:
     return out
 
 
+def merge_window_us(d: int, k: int = 1) -> float:
+    """The demand window: one round of a sustained d-round merge, T_merge/d.
+    The once-per-merge park descent is amortized over the merge's d rounds,
+    so this is the exact per-pair cadence the seam imposes (13.95 ms at d=7
+    baseline vs 13.91 ms for the local round)."""
+    return schedule_time_us(d, merge=True, rounds=d, k=k) / d
+
+
 def demand_rate_per_s(d: int, k: int = 1) -> float:
-    """Aggregate raw-pair demand: one pair per seam check per round time. The seam
-    has d checks (d-1 weight-4 + 1 weight-2), so the count is S.bell_pairs_per_round(d)
-    = d, not d-1; imported from the scheduler so the two cannot drift."""
-    return S.bell_pairs_per_round(d) / (schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6)
+    """Aggregate raw-pair demand: one pair per seam check per merge-round window.
+    The seam has d checks (d-1 weight-4 + 1 weight-2), so the count is
+    S.bell_pairs_per_round(d) = d, not d-1; imported from the scheduler so the
+    two cannot drift. The window is merge_window_us, one amortized merge round."""
+    return S.bell_pairs_per_round(d) / (merge_window_us(d, k) * 1e-6)
 
 
 def worst_elevated_idle_us(d: int, k: int = 1) -> float:
@@ -453,7 +462,7 @@ if __name__ == "__main__":
             continue                                 # the big merges take a while
         row = [schedule_time_us(d, True, d, k) / 1000 for k in range(3)]
         print(f"  d={d:2d}: {row[0]:8.2f} {row[1]:8.2f} {row[2]:8.2f}")
-    print("\naggregate demand rate d/T_round, pairs/s:")
+    print("\naggregate demand rate, d pairs per merge window (T_merge/d), per s:")
     for d in ds:
         row = [demand_rate_per_s(d, k) for k in range(3)]
         print(f"  d={d:2d}: {row[0]:8.1f} {row[1]:8.1f} {row[2]:8.1f}")

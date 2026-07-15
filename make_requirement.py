@@ -31,8 +31,8 @@ def eta_chain(k):
 
 def required_eta_int(d, k, pn_target):
     """eta_int such that p*N = pn_target in bracket k at distance d."""
-    t_round_us = T.schedule_time_us(d, merge=False, rounds=1, k=k)
-    n_attempts = t_round_us / T_ATT_US[k]
+    t_window_us = T.merge_window_us(d, k)     # one amortized merge round
+    n_attempts = t_window_us / T_ATT_US[k]
     p_req = pn_target / n_attempts
     eta_arm = math.sqrt(p_req / BSA)              # p = BSA * eta_arm^2
     return eta_arm / eta_chain(k), p_req, n_attempts
@@ -57,14 +57,14 @@ if __name__ == "__main__":
     # This is the demand BEFORE the chain is split off, the closing numbers
     # of thesis Section 5.2 and the per-attempt row of Table 5.4.
     print("\nper-attempt success demand p at the link (no chain split):")
-    WANT_P99 = (2.5e-4, 3.3e-4, 9.7e-4)          # thesis quotes, 2 digits
+    WANT_P99 = (2.42e-4, 3.30e-4, 9.56e-4)       # thesis quotes at the merge window
     for k in range(3):
         _, p_mean, n = required_eta_int(d, k, 1.0)
         _, p_99, _ = required_eta_int(d, k, ln100)
         print(f"  {BRACKETS[k]:14s} N={n:6.0f}  mean {p_mean:.2e}  "
               f"99% form {p_99:.2e}")
         assert abs(p_99 - WANT_P99[k]) / WANT_P99[k] < 0.05, (k, p_99)
-    assert abs(required_eta_int(d, 1, 1.0)[1] - 7.2e-5) / 7.2e-5 < 0.02
+    assert abs(required_eta_int(d, 1, 1.0)[1] - 7.17e-5) / 7.17e-5 < 0.02
 
     print(f"\ndelivery probability at exactly pN=1: {1 - math.exp(-1):.3f}")
     print(f"expected empty windows per merge, d*d(1-P): "

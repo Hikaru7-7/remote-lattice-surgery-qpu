@@ -50,11 +50,11 @@ if __name__ == "__main__":
 
     print(f"\nmemory line, full T_round/T2 (stored half waits one round):")
     for k, br in enumerate(BRACKETS):
-        tr = T.schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6
+        tr = T.merge_window_us(d, k) * 1e-6
         line = " ".join(f"{tr/t2:.1e} ({nm.split(',')[0]})"
                         for nm, t2 in T2_S.items())
-        print(f"  {br:14s} T_round {tr*1e3:5.1f} ms:  {line}")
-    tr_base = T.schedule_time_us(d, merge=False, rounds=1, k=1) * 1e-6
+        print(f"  {br:14s} window {tr*1e3:5.1f} ms:  {line}")
+    tr_base = T.merge_window_us(d, 1) * 1e-6
     assert 2e-4 < tr_base / 50.0 < 3e-4   # ~2.8e-4, the prose number
     floor_tight = share * 1e-3
     # The distilled lane's accumulation wait (thesis 4.3.4/7.3): the first-caught
@@ -64,14 +64,14 @@ if __name__ == "__main__":
     # the output; that is the one-round charge above. Checked here: the extra
     # input idle is small against the 6% raw error the distillation budget
     # already carries.
-    extra_in = 2.0 * 13.911e-3 / 50.0
+    extra_in = 2.0 * (T.merge_window_us(D, 1) * 1e-6) / 50.0
     assert extra_in < 0.01 * 0.06, "accumulation wait must be negligible against the raw error budget"
     print(f"  distilled-lane accumulation wait, 2 extra windows on the raw inputs: {extra_in:.1e},")
     print(f"  {extra_in/0.06*100:.1f}% of the 6% raw error the x3.4 demand already carries; first-order")
     print(f"  errors are caught by the selection checks, so the output keeps the one-round charge.")
     print(f"\nwait as a fraction of the tight floor {floor_tight:.0e}:")
     for k, br in enumerate(BRACKETS):
-        tr = T.schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6
+        tr = T.merge_window_us(d, k) * 1e-6
         print(f"  {br:14s} {tr/50.0:.1e}  = {100*(tr/50.0)/floor_tight:4.1f}% of floor")
     print("still charged in full and non-binding, but not negligible at the")
     print("conservative round; the prose states the fractions honestly (G2).")
@@ -84,13 +84,13 @@ if __name__ == "__main__":
     # terms stay under the seam floor, so the raw visibility floor is set by the seam grade.
     print(f"\nidle dephasing, worst ion, charged in full at the clock T2 = 50 s:")
     for k, br in enumerate(BRACKETS):
-        t_stored = T.schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6
+        t_stored = T.merge_window_us(d, k) * 1e-6
         t_elev = T.worst_elevated_idle_us(d, k) * 1e-6
         e_stored, e_elev = t_stored / 50.0, t_elev / 50.0
         print(f"  {br:14s} stored half {t_stored*1e3:5.1f} ms -> {e_stored:.1e}, "
               f"elevated ancilla {t_elev*1e3:4.2f} ms -> {e_elev:.1e}  "
               f"(sum {e_stored+e_elev:.1e})")
-    e_idle_base = (T.schedule_time_us(d, merge=False, rounds=1, k=1) * 1e-6
+    e_idle_base = (T.merge_window_us(d, 1) * 1e-6
                    + T.worst_elevated_idle_us(d, 1) * 1e-6) / 50.0
     assert e_idle_base < share * 1e-3, "idle dephasing must stay under the seam floor"
     print(f"sum at baseline {e_idle_base:.1e} stays under the {share*1e-3:.0e} seam floor, so the")
