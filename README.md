@@ -12,7 +12,7 @@ A timing layer prices the certified schedule in seconds from published
 demonstrations, and a requirement layer inverts the priced demand into the
 efficiency the design's ion--photon interface must deliver.
 
-This is the software behind Sections 4.4, 5.2, 5.3, 6.3, 7.2, and 7.3 of the
+This is the software behind Sections 4.4, 5.2, 5.3, 6.3, 7.1, and 7.3 of the
 thesis *Trapped-Ion Multi-Computer Design for Remote Lattice Surgery* (Keio
 University, 2026). Every count and every claim in those sections can be
 reproduced here.
@@ -63,9 +63,9 @@ in the thesis is exactly what the command shows. One distance at a time is
 | `make_requirement.py` | Inverts the priced demand into the required ion--photon interface efficiency, in the mean and the 99%-delivery forms. Chain brackets mirror Table 5.1 of the thesis; the timing comes live from `qec_timing.py`. Every requirement number in thesis Section 5.2 reprints from this file. |
 | `make_fidelity.py` | The fidelity track of thesis 5.3: the seam-grade floor from the published seam tolerance, the memory line, and the required two-photon visibility. |
 | `make_supply.py` | The supply side of thesis Chapter 6: cavity geometry to interface efficiency at the fiber, the three scenarios, and the verdict preview against the requirement. |
-| `qec_distill.py` | The distillation track of thesis Section 7.3: certifies the double-selection round at every odd distance, and prices its pair cost and rate factor (3 raw pairs to 1, demand times 3.4). |
+| `qec_distill.py` | The distillation track of thesis Section 7.1: certifies the double-selection round at every odd distance, and prices its pair cost and rate factor (3 raw pairs to 1, demand times 3.4). |
 | `qec_inject.py` | Code-capacity error injection on the rotated surface code and the lattice-surgery seam, decoded by exact minimum-weight matching. Measures the space-like seam effect, about 1.5x the bulk rate. Uses `numpy`. |
-| `qec_inject_stim.py` | Circuit-level error injection with Stim and PyMatching. Measures the merge's time-like logical error, the seam factor `1.8^((d+1)/2)` (about 11 at d = 7), and its recovery by one distance step. Uses `numpy`, `stim`, `pymatching`. |
+| `qec_inject_stim.py` | Circuit-level error injection with Stim and PyMatching. Measures the merge's time-like logical error in the repetition-code model the joint parity forms in the round direction, the seam factor `1.8^((d+1)/2)` (about 11 at d = 7), and its recovery by one distance step. Uses `numpy`, `stim`, `pymatching`. |
 | `qec_inject_stim_hw.py` | The same circuit-level measurement pinned to the demonstrated per-operation error rates. Uses `numpy`, `stim`, `pymatching`. |
 | `CIRCUIT_LEVEL_RESULTS.md` | The captured output of the circuit-level runs, tabulated for cross-checking against thesis Sections 5.3 and 7.2. |
 | `qec_visualizer.py` | Replays the scheduler's operation list, unchanged, on the full Chapter-4 cell geometry: the 2d+1 memory homes, the gate strip with its junction columns, gate wells, hold wells, and swap well, the SPAM sites, the wall, and the cavities, one cell per code row. The scheduler's `frame_errors` legality check runs on every frame, at build time and precomputed into each page's live line, so the visualizer reflects the scheduler and adds no rule of its own: well occupancy within capacity, no ion at rest on a junction column, and no reordering along a row without a shared-well crystal rotation. |
@@ -163,8 +163,9 @@ rules. The command reprints this table in a few minutes of CPU.
 - The full d-round merge packs into 78, 160, and 252 time-steps at d = 3, 5, 7,
   and every one of its d rounds takes exactly the same number of steps.
 - Resources are closed forms. `d^2` data ions, `d^2 - 1` ancillas, `d` comm
-  lanes, `d - 1` Bell pairs per merge round, `4d(d - 1)` two-qubit gates per
-  round, `floor((d-1)/2)` park wells.
+  lanes, `d` Bell pairs per merge round (one per seam check, `d - 1` weight-4
+  plus one weight-2), `4d(d - 1)` two-qubit gates per round,
+  `floor((d-1)/2)` park wells.
 
 ## Design contract
 
@@ -185,7 +186,8 @@ measured here rather than cited from the literature.
   measures the space-like seam effect, about 1.5x the bulk rate and roughly
   flat in distance.
 - `qec_inject_stim.py` and `qec_inject_stim_hw.py` run full circuit-level noise
-  with Stim and PyMatching. They measure the merge's time-like logical error,
+  with Stim and PyMatching. They measure the merge's time-like logical error
+  in the repetition-code model the joint parity forms in the round direction,
   the seam factor `1.8^((d+1)/2)` (about 11 at d = 7), and its recovery by one
   distance step. The `_hw` variant pins every noise knob to the demonstrated
   per-operation rate.
