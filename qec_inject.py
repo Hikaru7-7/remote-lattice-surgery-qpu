@@ -3,7 +3,7 @@
 
 The analytical seam argument of Section 5.3 (Ramette et al.) treats the merged patch
 as a decoupled bulk and seam, and prices the seam at 1.8 times the bulk's ratio, a
-constant factor near 8 on the merge's logical error at d=7 that one distance step
+factor near eleven (1.8^((d+1)/2)) on the merge's time-like logical at d=7 that one distance step
 recovers. This module MEASURES that instead of citing it: it injects Pauli errors on
 the code that qec_scheduler.build_stabilizers() actually builds, decodes with minimum-
 weight perfect matching, and reads off the logical error rate. Comparing a clean patch
@@ -223,7 +223,7 @@ if __name__ == "__main__":
     print("qec_inject.py -- code-capacity error injection on the certified code\n")
     print("Honesty flags:")
     print("  * Code-capacity noise (data X errors, perfect syndrome), single round.")
-    print("    It measures the SPACE-LIKE seam effect. The analytical factor-8 of")
+    print("    It measures the SPACE-LIKE seam effect. The analytical factor-eleven of")
     print("    Section 5.3 is the merge's TIME-LIKE logical error over d rounds, a")
     print("    different quantity that needs the multi-round (or circuit-level, Stim)")
     print("    merge; that is the Section 8 follow-up.")

@@ -15,7 +15,7 @@ the honest noise model the code-capacity qec_inject.py could not reach:
      seam checks every round for d rounds, is a repetition code in the round direction.
      Loading that seam at 1.8x the bulk rate (the eight charged operations of Section 5.3)
      and taking the ratio to the unloaded seam, SAME code, isolates the seam factor. Deep
-     below threshold that ratio is 1.8^((d+1)/2), which is ~8 at d=7 -- the analytical
+     below threshold that ratio is 1.8^((d+1)/2), which is ~10.5 at d=7 (the thesis's 'about 11') -- the analytical
      claim, now measured rather than cited.
 
 Decoding is minimum-weight matching (PyMatching) off Stim's detector error model, so no
@@ -96,7 +96,7 @@ if __name__ == "__main__":
         print(f"   {p:>7.3f} | " + " ".join(f"{x:9.6f}" for x in row))
 
     print("\n3) THE SEAM FACTOR on the time-like logical (same code, 1.8x vs 1x noise):")
-    print("   the measured version of the analytical 'near 8' at d=7. High statistics.")
+    print("   the measured version of the analytical 'about 11' at d=7. High statistics.")
     SHOTS_HI = 3_000_000
     p = 0.007
     print(f"   at p={p}, {SHOTS_HI:,} shots (fails column shows the statistics):")
@@ -110,7 +110,7 @@ if __name__ == "__main__":
 
     print("\n4) RECOVERY: does one distance step undo the seam factor at d=7?")
     print("   loaded = 1.8x seam. per-step suppression = loaded(7)/loaded(9);")
-    print("   one step recovers the ~12x factor once this suppression exceeds ~12.")
+    print("   one step recovers the ~10.5x factor once this suppression exceeds ~10.5.")
     SHOTS_R = 5_000_000
     print(f"     p     |  loaded(7)   loaded(9) | 1-step supp | supp x p")
     for p in (0.004, 0.005, 0.006, 0.007):
@@ -119,7 +119,7 @@ if __name__ == "__main__":
         supp = ld7 / ld9 if ld9 > 0 else float("nan")
         print(f"   {p:.3f}  | {ld7:.3e}   {ld9:.3e} | {supp:7.1f}x  | {supp * p:.3f}")
     print("   (supp x p roughly constant => suppression = C/p; one step recovers where")
-    print("    C/p >= 12, i.e. below p ~ C/12 -- compare that to the operating p~1e-3.)")
+    print("    C/p >= 10.5, i.e. below p ~ C/10.5 -- compare that to the operating p~1e-3.)")
 
     print(f"\n[output saved to {_saved}]")
     print("--- paste everything above this line back ---")
