@@ -122,10 +122,13 @@ if __name__ == "__main__":
     # layers cannot drift (they used to hardcode 6/16 independently).
     import make_fidelity as MF
     seam_total = MF.MULTIPLIER + MF.COMM_OPS         # 10 + 8 = 18
+    # time-like factor r^((d+1)/2), the thesis 5.3/7.2 formula; confirmed at
+    # circuit level in CIRCUIT_LEVEL_RESULTS.md (measured 10.7 at d=7 vs 10.5)
     for tol in (10.0, 14.0):
         r = seam_total / tol
         print(f"  seam/bulk ratio after distillation at {tol:.0f}x: "
-              f"{r:.2f} -> logical factor {r**(d/2):.1f} at d={d}")
+              f"{r:.2f} -> time-like factor {r**((d+1)/2):.1f} at d={d}")
+    assert abs((seam_total/10.0)**((d+1)/2) - 10.5) < 0.1   # "about 11" (ch7)
 
     print(f"free-space comparator (demonstrated 2.3% per arm incl. 71% APD): "
           f"eta_int equiv {0.023/0.71*100:.1f}%")
