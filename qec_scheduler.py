@@ -247,10 +247,15 @@ def bulk_steps_at(d: int, r: int) -> set:
 
 
 def n_seam_checks(d: int, r: int) -> int:
-    """How many weight-4 seam checks the row-r seam qubit belongs to. The seam
-    has d-1 checks; check s reads boundary qubits of rows s and s+1, so an
-    interior qubit is in two, a corner qubit in one."""
-    return (1 if r >= 1 else 0) + (1 if r <= d - 2 else 0)
+    """How many seam checks the row-r boundary qubit (r, d-1) belongs to in a
+    merge. It is in the weight-4 check of rows (r-1, r) and of rows (r, r+1) where
+    those exist; the row-(d-1) qubit is additionally in the weight-2 boundary
+    check. So an interior qubit is in two, the top corner in one, and the bottom
+    corner (row d-1) in two."""
+    n = (1 if r >= 1 else 0) + (1 if r <= d - 2 else 0)
+    if r == d - 1:
+        n += 1
+    return n
 
 
 def check_spam_capacity(d: int) -> None:
@@ -270,48 +275,118 @@ def check_seam_fits(d: int) -> None:
             f"d={d} row {r}: {n_seam_checks(d, r)} seam gates, only {free} free steps"
 
 
-# The two modules are two copies of the same code. A merge joins them along the
-# seam where module A's right boundary (column d-1) meets module B's left
-# boundary (column 0).
+# The two modules are two copies of the same code, placed boundary-to-boundary:
+# module B is the left-right mirror of module A, so A's right boundary (column
+# d-1) faces B's right boundary (column d-1) across the seam and the code's
+# checkerboard continues unbroken across it. (verify_seam.py / check_seam_valid
+# confirm by GF(2) that the merged 2d x d patch then commutes and encodes one
+# logical qubit; the naive "A-right meets B-left" join does NOT close -- it leaves
+# extra logicals -- which is why this orientation is forced, not chosen.)
 def seam_stabilizers(d: int) -> list:
-    """The d-1 weight-4 seam checks turned on for a merge. Check s reads two
-    boundary data of module A (rows s and s+1, column d-1) and two of module B
-    (rows s and s+1, column 0). Two of its four gates cross the remote link.
+    """The d seam checks turned on for a merge, verified against the merged rotated
+    patch by GF(2) (check_seam_valid). A length-d seam carries d-1 interior
+    (weight-4) checks plus one boundary (weight-2) check, d in all -- not d-1.
+    Weight-4 check s reads boundary data of module A (rows s and s+1, column d-1)
+    and of module B (rows s and s+1, column d-1, the mirror); two of its four gates
+    cross the remote link. The weight-2 check on row d-1 reads one qubit in each
+    module, one gate crossing the link.
 
-    Each seam check is Z-type. The merge joins the two modules along their
-    column-(d-1)/column-0 boundaries, which carry the Z-type edge checks
-    (right_boundary_stabs), so the smooth (Z) merge measures the joint Z operator
-    and the seam checks inherit that type. Z is the native preparation and
-    measurement basis, so a seam ancilla reads without a single-qubit basis
-    rotation, unlike an X-type local check (basis_rotations, check_basis)."""
+    The seam type ALTERNATES with the checkerboard: weight-4 check s is X for even
+    s and Z for odd s, and the weight-2 boundary check is X. So the seam is MIXED,
+    (d+1)/2 X and (d-1)/2 Z -- never a single native type. The X-type seam checks
+    prepare and read their comm ancilla in the X basis, one rotation folded into
+    prep and one into read, exactly like the bulk X-checks (basis_rotations); the
+    Z-type ones are native. Each check crosses the link once, so a merge round
+    spends d Bell pairs, one per check (bell_pairs_per_round)."""
     seam = []
-    for s in range(d - 1):
-        seam.append({"s": s, "kind": "Z",                 # smooth merge, Z-type seam
-                     "A": [(s, d - 1), (s + 1, d - 1)],   # local, in module A
-                     "B": [(s, 0),     (s + 1, 0)]})       # remote, in module B
+    for s in range(d - 1):                                  # d-1 interior weight-4 checks
+        seam.append({"s": s, "kind": "X" if s % 2 == 0 else "Z", "weight": 4,
+                     "A": [(s, d - 1), (s + 1, d - 1)],     # two local, module A col d-1
+                     "B": [(s, d - 1), (s + 1, d - 1)]})    # two remote, module B col d-1 (mirror)
+    seam.append({"s": d - 1, "kind": "X", "weight": 2,      # one boundary weight-2 check
+                 "A": [(d - 1, d - 1)],                     # one local
+                 "B": [(d - 1, d - 1)]})                    # one remote
     return seam
 
 
 def check_seam_census(d: int) -> None:
-    """Check: there are d-1 seam checks, each weight 4, split two local and two
-    remote, matching the boundary the code exposes to the seam."""
+    """Check: there are d seam checks -- d-1 weight-4 (two local + two remote) and
+    one weight-2 boundary check (one local + one remote) -- matching the interior
+    plus boundary plaquettes of a length-d seam."""
     seam = seam_stabilizers(d)
-    assert len(seam) == d - 1, f"d={d}: {len(seam)} seam checks, want {d-1}"
-    for sc in seam:
+    assert len(seam) == d, f"d={d}: {len(seam)} seam checks, want {d}"
+    w4 = [sc for sc in seam if sc["weight"] == 4]
+    w2 = [sc for sc in seam if sc["weight"] == 2]
+    assert len(w4) == d - 1 and len(w2) == 1, \
+        f"d={d}: {len(w4)} weight-4 and {len(w2)} weight-2, want {d-1} and 1"
+    for sc in w4:
         assert len(sc["A"]) == 2 and len(sc["B"]) == 2, \
-            f"d={d}: seam check {sc['s']} is not two local plus two remote"
+            f"d={d}: weight-4 seam check {sc['s']} is not two local plus two remote"
+    for sc in w2:
+        assert len(sc["A"]) == 1 and len(sc["B"]) == 1, \
+            f"d={d}: weight-2 seam check {sc['s']} is not one local plus one remote"
+
+
+def check_seam_valid(d: int) -> None:
+    """Certify the merge over GF(2), the 'trust the checks not the builder' proof.
+    Build both modules' retained bulk (each code minus its column-(d-1) boundary
+    check, since module B is module A's mirror and both face the seam on column
+    d-1), turn on seam_stabilizers, and confirm every generator commutes and the
+    merged code encodes exactly one logical qubit. This is what pins the seam count
+    to d, its type to the mixed (d+1)/2 X + (d-1)/2 Z pattern, and the mirror
+    orientation -- none of it asserted by hand. O(n^3), so run at small d only."""
+    n = 2 * d * d
+    def gi(side, r, c):
+        return (0 if side == "A" else d * d) + r * d + c
+    def sym(kind, cells):
+        x = [0] * n; z = [0] * n
+        for side, r, c in cells:
+            (x if kind == "X" else z)[gi(side, r, c)] = 1
+        return x + z
+    rows = []
+    for side in ("A", "B"):
+        for s in build_stabilizers(d):
+            if all(c == d - 1 for r, c in s.data):     # drop the col-(d-1) boundary check
+                continue
+            rows.append(sym(s.kind, [(side, r, c) for r, c in s.data]))
+    for sc in seam_stabilizers(d):
+        cells = [("A", r, c) for r, c in sc["A"]] + [("B", r, c) for r, c in sc["B"]]
+        rows.append(sym(sc["kind"], cells))
+    def commutes(a, b):
+        s = 0
+        for i in range(n):
+            s ^= (a[i] & b[n + i]) ^ (a[n + i] & b[i])
+        return s == 0
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            assert commutes(rows[i], rows[j]), \
+                f"d={d}: merged generators {i},{j} anticommute"
+    M = [r[:] for r in rows]; rank = 0
+    for col in range(2 * n):
+        piv = next((i for i in range(rank, len(M)) if M[i][col]), None)
+        if piv is None:
+            continue
+        M[rank], M[piv] = M[piv], M[rank]
+        for i in range(len(M)):
+            if i != rank and M[i][col]:
+                M[i] = [a ^ b for a, b in zip(M[i], M[rank])]
+        rank += 1
+    k = n - rank
+    assert k == 1, f"d={d}: merged code has {k} logical qubits, want 1"
 
 
 def bell_pairs_per_round(d: int) -> int:
     """One heralded Bell pair carries each seam check's remote link, so a merge
-    round needs d-1 pairs, one per seam check."""
-    return d - 1
+    round needs d pairs, one per seam check (d-1 weight-4 plus 1 weight-2). The
+    old d-1 count missed the weight-2 boundary check."""
+    return d
 
 
 def check_merge_demand(d: int, lanes: int = None) -> tuple:
-    """Check: a merge round needs d-1 Bell pairs, the d communication lanes can
-    supply them with one lane held spare, and a full merge of d rounds needs
-    d(d-1) pairs in all."""
+    """Check: a merge round needs d Bell pairs, one per seam check, and the d
+    communication lanes supply them with NONE to spare (the earlier d-1 count
+    missed the weight-2 boundary check, and with it the last free lane is taken).
+    A full merge of d rounds needs d*d pairs in all."""
     demand = bell_pairs_per_round(d)
     assert demand == len(seam_stabilizers(d)), f"d={d}: demand {demand} != seam checks"
     lanes = d if lanes is None else lanes
@@ -329,11 +404,12 @@ def check_merge_demand(d: int, lanes: int = None) -> tuple:
 # swap well to gate its same-cell boundary data (row s), crosses the gate-zone
 # junction at column d-1 into the next cell to gate its cross-cell data (row s+1), and
 # returns to the swap well to be measured, teleporting the half-parity to the other
-# module. Each round the two ions exchange roles by a crystal rotation at the swap
-# well (comm_swap): the networker that just heralded carries its fresh pair over and
-# the emptied carrier returns to the cavity. A merge uses d-1 lanes, one per seam
-# check, and holds one lane spare. No junction sits in the I/F zone; the reorder well
-# is in the gate zone, which is built for rotations and away from the cavity.
+# module. The weight-2 boundary check's lane gates only its single row-(d-1) datum,
+# with no junction crossing. Each round the two ions exchange roles by a crystal
+# rotation at the swap well (comm_swap): the networker that just heralded carries its
+# fresh pair over and the emptied carrier returns to the cavity. A merge uses all d
+# lanes, one per seam check, with NONE to spare. No junction sits in the I/F zone; the
+# reorder well is in the gate zone, which is built for rotations and away from the cavity.
 def comm_ions(d: int) -> dict:
     """d communication LANES, one per cell in the I/F zone; each lane carries
     comm_ions_per_lane() Ba+ ions (two, ping-pong). The lane is the unit the seam
@@ -342,7 +418,8 @@ def comm_ions(d: int) -> dict:
 
 
 def comm_wells(d: int) -> dict:
-    """The two wells each active comm lane (0..d-2) owns for the ping-pong.
+    """The two wells each active comm lane (0..d-1, all d of them) owns for the
+    ping-pong.
       "cavity": in the I/F zone at the far (photonic-edge) end of the cell, where
                 the networker sits and attempts.
       "swap":   at the interface-facing end of the GATE zone, one well beyond the
@@ -350,7 +427,7 @@ def comm_wells(d: int) -> dict:
                 exchange roles. A gate-zone well (a motional reorder belongs in the
                 gate zone, not beside the cavity), distinct from every data column
                 0..d-1, the seam column d-1, and the boundary junction column."""
-    return {s: {"cavity": ("IF", s), "swap": ("gate-end", s)} for s in range(d - 1)}
+    return {s: {"cavity": ("IF", s), "swap": ("gate-end", s)} for s in range(d)}
 
 
 def check_comm_pingpong(d: int) -> None:
@@ -360,12 +437,12 @@ def check_comm_pingpong(d: int) -> None:
     two ions are identical Ba+, so the end configuration after any number of rounds
     (one at the cavity, one at the swap well) equals the start up to relabelling."""
     wells = comm_wells(d)
-    assert len(wells) == d - 1, f"d={d}: {len(wells)} active comm lanes, want {d-1}"
+    assert len(wells) == d, f"d={d}: {len(wells)} active comm lanes, want {d}"
     for s, w in wells.items():
         assert w["cavity"] != w["swap"], f"d={d} lane {s}: cavity and swap coincide"
         assert w["cavity"][0] == "IF" and w["swap"][0] == "gate-end", \
             f"d={d} lane {s}: wells not in their zones"
-    assert all(v["ions"] == 2 for k, v in comm_ions(d).items() if k < d - 1), \
+    assert all(v["ions"] == 2 for k, v in comm_ions(d).items() if k < d), \
         f"d={d}: an active lane is not two-ion"
     full = round_ops(d, merge=True, rounds=d)
     assert sum(1 for op in full if op[0] == "comm_swap") == d, \
@@ -374,19 +451,19 @@ def check_comm_pingpong(d: int) -> None:
 
 def check_comm_ions(d: int) -> None:
     """Check: d comm lanes, one per cell in the I/F zone, two Ba+ ions each
-    (ping-pong), and a merge round uses d-1 lanes (seam check s uses cell s's
-    lane) with one lane spare."""
+    (ping-pong), and a merge round uses ALL d lanes (seam check s uses cell s's
+    lane) with none to spare."""
     ci = comm_ions(d)
     assert len(ci) == d, f"d={d}: {len(ci)} comm lanes, want {d}"
     assert all(v["zone"] == "IF" for v in ci.values()), "a comm lane is not in the I/F zone"
     assert all(v["ions"] == 2 for v in ci.values()), "a comm lane is not two-ion (ping-pong)"
-    used = set(range(d - 1))                          # seam check s -> cell s's lane
-    assert len(used) == d - 1 and d - len(used) == 1, "not d-1 used with one spare"
-    # one ping-pong reorder step per merge round, covering all d-1 active lanes
+    used = set(range(d))                              # seam check s -> cell s's lane
+    assert len(used) == d and d - len(used) == 0, "not all d lanes used (none spare)"
+    # one ping-pong reorder step per merge round, covering all d active lanes
     m = round_ops(d, merge=True, rounds=1)
     sw = [op for op in m if op[0] == "comm_swap"]
-    assert len(sw) == 1 and len(sw[0][1]) == d - 1, \
-        f"d={d}: comm swap not one step over {d-1} active lanes"
+    assert len(sw) == 1 and len(sw[0][1]) == d, \
+        f"d={d}: comm swap not one step over {d} active lanes"
     # over a full d-round merge, one reorder per round: the two ions return to
     # their starting roles after an even number of rounds (alternation closes)
     full = round_ops(d, merge=True, rounds=d)
@@ -428,7 +505,7 @@ def seam_schedule(d: int) -> dict:
     dused = {r: set() for r in range(d)}
     jused = set()
     sched = {}
-    for s in range(d - 1):
+    for s in range(d - 1):                               # d-1 weight-4 checks
         jc = (d - 1, s)                                  # the junction this comm ion crosses
         jfree = {st for st in range(4) if (jc, st) not in jbusy and (jc, st) not in jused}
         found = None
@@ -443,6 +520,11 @@ def seam_schedule(d: int) -> dict:
         same, cross = found
         dused[s].add(same); dused[s + 1].add(cross); jused.add((jc, cross))
         sched[s] = {"same": same, "cross": cross, "junction": jc}
+    # the weight-2 boundary check on row d-1: one same-cell gate, no junction crossing
+    free_last = sorted(dfree[d - 1] - dused[d - 1])
+    assert free_last, f"d={d} seam {d-1}: no free step for the weight-2 boundary check"
+    dused[d - 1].add(free_last[0])
+    sched[d - 1] = {"same": free_last[0], "cross": None, "junction": None}
     return sched
 
 
@@ -456,6 +538,8 @@ def check_seam_schedule(d: int) -> None:
     seen_j = set()
     for s, g in sched.items():
         assert g["same"] not in bulk_steps_at(d, s), f"d={d} seam {s}: same-cell gate clashes with a bulk gate"
+        if g["cross"] is None:                # weight-2 boundary check: only a same-cell gate
+            continue
         assert g["cross"] not in bulk_steps_at(d, s + 1), f"d={d} seam {s}: cross-cell gate clashes with a bulk gate"
         assert (g["junction"], g["cross"]) not in jbusy, f"d={d} seam {s}: comm ion clashes with a bulk crossing at a junction"
         assert (g["junction"], g["cross"]) not in seen_j, f"d={d} seam {s}: two comm ions share a junction in a step"
@@ -722,10 +806,11 @@ def check_round_ops(d: int) -> None:
     # the packed local round is exactly 22+2d deep: 19 connection + d file-out
     # + 3 shuttle/read/shuttle + d reset back to the interleaved rest state
     assert len(parallel_steps(d, merge=False)) == 22 + 2 * d, f"d={d}: round depth is not 22+2d"
-    # a merge adds the seam: d-1 comm deliveries, each two gates (same + cross)
+    # a merge adds the seam: d-1 weight-4 comm deliveries, each two gates (same +
+    # cross), plus one weight-2 delivery of a single same-cell gate -> 2(d-1)+1
     m = round_ops(d, merge=True, rounds=1)
     cg = sum(len(op[2]) for op in m if op[0] == "comm_gate")
-    assert cg == 2 * (d - 1), f"d={d}: {cg} comm gates, want {2*(d-1)}"
+    assert cg == 2 * (d - 1) + 1, f"d={d}: {cg} comm gates, want {2*(d-1)+1}"
 
 
 # --- OPERATION TALLY  (the hook for Chapter 5 timing) -----------------------
@@ -1043,17 +1128,22 @@ def motional_beats_per_round(d: int) -> int:
 
 
 def check_seam_basis(d: int) -> None:
-    """Check: the d-1 merge seam checks are Z-type, the native basis, so a seam
-    ancilla reads without a single-qubit rotation. The seam is Z because it
-    replaces the Z-type right-boundary checks (right_boundary_stabs) along the
-    smooth boundary the two modules join on, so its type is fixed by the geometry,
-    not chosen; a seam check of any other type would contradict the boundary it
-    turns off. This is why the merge adds no basis rotation to the comm lane."""
+    """Check: the d merge seam checks are MIXED type -- (d+1)/2 X and (d-1)/2 Z,
+    alternating with the checkerboard as it continues across the seam (fixed by
+    geometry, not chosen; verified in check_seam_valid). This corrects the earlier
+    claim that the seam is a single native (Z) type. The X-type seam checks prepare
+    and read their comm ancilla in the X basis, one single-qubit rotation folded
+    into prep and one into read, exactly as the bulk X-checks do (basis_rotations,
+    check_basis); the Z-type ones are native. So a merge round adds 2*(d+1)/2 = d+1
+    single-qubit rotations on the comm lanes -- real operations, but folded into
+    prep and read and charging no extra time-step."""
     seam = seam_stabilizers(d)
-    assert len(seam) == d - 1, f"d={d}: {len(seam)} seam checks, want {d-1}"
-    assert all(sc["kind"] == "Z" for sc in seam), f"d={d}: a seam check is not Z-type"
-    assert all(s.kind == "Z" for s in right_boundary_stabs(d)), \
-        f"d={d}: right boundary not Z-type, the seam type would be inconsistent"
+    assert len(seam) == d, f"d={d}: {len(seam)} seam checks, want {d}"
+    nX = sum(1 for sc in seam if sc["kind"] == "X")
+    nZ = sum(1 for sc in seam if sc["kind"] == "Z")
+    assert nX == (d + 1) // 2 and nZ == (d - 1) // 2, \
+        f"d={d}: seam type split is {nX}X/{nZ}Z, want {(d+1)//2}X/{(d-1)//2}Z"
+    assert all(sc["kind"] in ("X", "Z") for sc in seam), f"d={d}: a seam check has no basis"
 
 
 # --- AUDIT #2: d=3 matches the hand-checked simulator ----------------------
@@ -1248,160 +1338,10 @@ def report(d: int) -> None:
     ps = len(parallel_steps(d, merge=True, rounds=d))
     print(f"d={d}: all {n} checks PASS")
     print(f"  per-cell ancillas {per_cell_ancillas(d)}  (max {max(per_cell_ancillas(d))})")
-    print(f"  seam: {bell_pairs_per_round(d)} Bell pairs/round, {d} comm lanes ({d - 1} used + 1 spare)")
+    print(f"  seam: {bell_pairs_per_round(d)} Bell pairs/round, {d} comm lanes (all {d} used, none spare)")
     print(f"  blocked comm lanes {blocked_lanes(d)}; bottom cell gains {bottom_park_wells(d)} park wells")
     print(f"  full d={d} merge: {t['total_beats']} serial beats -> {ps} parallel time-steps; {t['two_qubit_gates']} two-qubit gates")
     print(f"  by kind: {t['by_kind']}")
-
-
-# ---------------------------------------------------------------------------
-# Frame-level legality: the single physical-rule authority.
-#
-# The scheduler owns the schedule AND the physical rules. The visualizer expands
-# the op list to per-frame ion positions on the pixel geometry and hands each
-# frame back here to be judged; it invents no rule of its own. `geom` is a small
-# pixel descriptor (junction columns, gate wells, read spots, optical wall,
-# per-well capacity, row y-coordinates) so the scheduler stays free of pixel
-# constants while still owning every rule. A frame is
-#   {"slots": {ion: [x, row] | ["J", x, y]}, "op"?: str, "pairs"?: [[a,b],...],
-#    "tv"?: [ions momentarily in transit]}.
-# ---------------------------------------------------------------------------
-def _rowx(st, row, CY):
-    """The x-coordinate of an ion in `row`, whether resting ([x,row]) or in a
-    junction transit (["J",x,y]); None if it is not in that row."""
-    if len(st) == 2 and not isinstance(st[0], str) and st[1] == row:
-        return st[0]
-    if len(st) == 3 and st[2] == CY[row]:
-        return st[1]
-    return None
-
-
-def per_frame_errors(f, geom, kinds=None):
-    """Every rule a single frame must satisfy on its own: well capacity (with the
-    one-over allowance for an ion rotating through), no ion at rest on a junction
-    column, a gate only in a shared gate well isolated to its pair, a read only at
-    a SPAM site or the swap well, communication ions kept out of the memory zone
-    and code ions kept in front of the optical wall, and no two ions sharing one
-    junction point."""
-    d = geom["d"]; CAP = geom["CAP"]; JC = set(geom["JCOL"])
-    GATE_WELLS = set(geom["WELL"]); READ_SPOTS = set(geom["SPX"]) | {geom["SWX"]}
-    WALLX = geom["WALLX"]
-    out = []
-    slots = f["slots"]
-    gg, jpts = {}, {}
-    for i, s in slots.items():
-        if len(s) == 2 and not isinstance(s[0], str):
-            gg.setdefault((s[0], s[1]), []).append(i)
-        elif len(s) == 3:
-            jpts.setdefault((s[1], s[2]), []).append(i)
-    tvs = set(f.get("tv") or [])
-    for (x, row), mem in gg.items():
-        over = len(mem) - CAP.get(x, 99)
-        if x in CAP and over > min(1, sum(1 for m in mem if m in tvs)):
-            out.append(f"well x={round(x)} row {row} holds {len(mem)} > cap {CAP[x]}: {mem}")
-        if x in JC:
-            out.append(f"{mem} at REST on junction column x={round(x)}")
-    if f.get("op") == "gate":
-        for a, b in f.get("pairs", []):
-            sa = slots[a]
-            if slots[a] != slots[b] or len(sa) != 2 or sa[0] not in GATE_WELLS:
-                out.append(f"gate on {a},{b} outside a shared gate well")
-            else:
-                n = sum(1 for _i, s2 in slots.items() if s2 == sa)
-                if n != 2:
-                    out.append(f"gate on {a},{b} not isolated to the pair ({n} in well)")
-    if f.get("op") == "read":
-        for pr in f.get("pairs", []):
-            si = slots[pr[0]]
-            if len(si) != 2 or si[0] not in READ_SPOTS:
-                out.append(f"read of {pr[0]} away from a SPAM site or the swap well")
-    if kinds:
-        for i, s2 in slots.items():
-            if len(s2) != 2 or isinstance(s2[0], str):
-                continue
-            if kinds[i] in ("comm", "held") and s2[0] < min(JC) - 1:
-                out.append(f"communication-region ion {i} entered the memory zone")
-            if kinds[i] in ("data", "X", "Z") and s2[0] > WALLX:
-                out.append(f"code ion {i} crossed the optical wall")
-    for _pt, mem in jpts.items():
-        if len(mem) > 1:
-            out.append(f"{mem} share one junction point")
-    return out
-
-
-def pair_errors(prev, cur, geom):
-    """Rules that compare a frame with the one before it: an ion never changes
-    junction column mid-transit, never enters a row except through a junction
-    column, and never passes another ion along a row without the two first
-    sharing a well (a crystal rotation)."""
-    d = geom["d"]; CY = geom["CY"]; JCOL = geom["JCOL"]
-    ROWY = {CY[r]: r for r in range(d)}
-    out = []
-    ps, cs = prev["slots"], cur["slots"]
-    for i, s in cs.items():
-        a = ps.get(i)
-        if a is None:
-            continue
-        if len(a) == 3 and len(s) == 3 and abs(a[1] - s[1]) > 0.5:
-            out.append(f"{i} changed junction column mid-transit")
-        if a != s:
-            for row in range(d):
-                if _rowx(s, row, CY) is not None and _rowx(a, row, CY) is None:
-                    ok = len(s) == 3 and any(abs(s[1] - jx) < 0.5 for jx in JCOL)
-                    if not ok:
-                        out.append(f"{i} entered row {row} away from a junction column")
-    movers = [i for i in cs if i in ps and cs[i] != ps[i]]
-    if not movers:
-        return out
-    share = set()
-    for fr in (ps, cs):
-        gg = {}
-        for i, s in fr.items():
-            if len(s) == 2 and not isinstance(s[0], str):
-                gg.setdefault((s[0], s[1]), []).append(i)
-        for mem in gg.values():
-            for a in mem:
-                for b in mem:
-                    if a < b:
-                        share.add((a, b))
-    rows_hit = set()
-    for i in movers:
-        for fr in (ps, cs):
-            s = fr[i]
-            if len(s) == 2 and not isinstance(s[0], str):
-                rows_hit.add(s[1])
-            elif len(s) == 3 and s[2] in ROWY:
-                rows_hit.add(ROWY[s[2]])
-    mset = set(movers)
-    for row in rows_hit:
-        def seq(fr):
-            lst = [(x, i) for i, s in fr.items() for x in [_rowx(s, row, CY)] if x is not None]
-            return [i for _, i in sorted(lst)]
-        sa, sb = seq(ps), seq(cs)
-        rank = {i: k for k, i in enumerate(sb)}
-        common = [i for i in sa if i in rank]
-        for ii in range(len(common)):
-            for jj in range(ii + 1, len(common)):
-                a, b = common[ii], common[jj]
-                if (a in mset or b in mset) and rank[a] > rank[b] and (min(a, b), max(a, b)) not in share:
-                    out.append(f"row {row}: {a} passed {b} with no shared well")
-    return out
-
-
-def frame_errors(frames, geom, kinds=None):
-    """The single legality pass over a whole schedule's frames. Returns a list of
-    (frame_index, message) for every violation, empty when the schedule is legal.
-    The visualizer -- both its build-time pass and the live per-frame line in each
-    page -- calls this and adds no independent rule, so one program owns the
-    schedule and the rules together."""
-    out = []
-    for fi, f in enumerate(frames):
-        for m in per_frame_errors(f, geom, kinds):
-            out.append((fi, m))
-        if fi > 0:
-            for m in pair_errors(frames[fi - 1], f, geom):
-                out.append((fi, m))
-    return out
 
 
 if __name__ == "__main__":
@@ -1464,20 +1404,26 @@ if __name__ == "__main__":
             print(f"    row {r}: bulk in {b}, {n_seam_checks(3, r)} seam gate(s) fit in free {free}")
         for d in (3, 5, 7, 9, 11, 15):
             check_seam_census(d); check_merge_demand(d)
-        print("  seam census ......... PASS  (d-1 weight-4 seam checks)")
-        print("  merge demand ........ PASS  (d-1 Bell pairs/round, d lanes)")
+        for d in (3, 5, 7):
+            check_seam_valid(d)                        # GF(2): merged code commutes, k=1
+        print("  seam census ......... PASS  (d seam checks: d-1 weight-4 + 1 weight-2)")
+        print("  seam GF(2) validity . PASS  (merged 2d x d patch commutes, one logical; d=3,5,7)")
+        print("  merge demand ........ PASS  (d Bell pairs/round, d lanes, none spare)")
         for d in (3, 5, 7):
             dem, lanes, tot = check_merge_demand(d)
             print(f"    d={d}: {dem} pairs/round, {lanes} lanes ({lanes - dem} spare), {tot} per {d}-round merge")
         for d in (3, 5, 7, 9, 11, 15):
             check_comm_ions(d); check_comm_pingpong(d); check_seam_schedule(d)
-        print("  comm ions ........... PASS  (d lanes in the I/F zone, d-1 used + 1 spare)")
+        print("  comm ions ........... PASS  (d lanes in the I/F zone, all d used, none spare)")
         print("  comm ping-pong ...... PASS  (2 Ba+/active lane: networker at cavity,")
         print("                                carrier at gate-end swap well, 1 reorder/round)")
         print("  seam schedule ....... PASS  (seam + comm gates ride in the 4 steps)")
         print("  seam schedule (d=3), each seam check by step:")
         for si, g in seam_schedule(3).items():
-            print(f"    seam check {si} (cells {si},{si+1}): same-cell gate in step {g['same']}, cross-cell gate in step {g['cross']} through junction {g['junction']}")
+            if g["cross"] is None:
+                print(f"    seam check {si} (weight-2, row {si}): same-cell gate in step {g['same']}, no junction crossing")
+            else:
+                print(f"    seam check {si} (cells {si},{si+1}): same-cell gate in step {g['same']}, cross-cell gate in step {g['cross']} through junction {g['junction']}")
         for d in (3, 5, 7, 9, 11, 15):
             check_merge_no_crowding(d)
         print("  merge crowding ...... PASS  (comm ions carry the seam; cells unchanged)")

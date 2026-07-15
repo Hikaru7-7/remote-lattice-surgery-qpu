@@ -294,8 +294,10 @@ def phase_times_us(d: int, k: int = 1) -> dict:
 
 
 def demand_rate_per_s(d: int, k: int = 1) -> float:
-    """Aggregate raw-pair demand: d-1 pairs per local round time."""
-    return (d - 1) / (schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6)
+    """Aggregate raw-pair demand: one pair per seam check per round time. The seam
+    has d checks (d-1 weight-4 + 1 weight-2), so the count is S.bell_pairs_per_round(d)
+    = d, not d-1; imported from the scheduler so the two cannot drift."""
+    return S.bell_pairs_per_round(d) / (schedule_time_us(d, merge=False, rounds=1, k=k) * 1e-6)
 
 
 def worst_elevated_idle_us(d: int, k: int = 1) -> float:
@@ -451,7 +453,7 @@ if __name__ == "__main__":
             continue                                 # the big merges take a while
         row = [schedule_time_us(d, True, d, k) / 1000 for k in range(3)]
         print(f"  d={d:2d}: {row[0]:8.2f} {row[1]:8.2f} {row[2]:8.2f}")
-    print("\naggregate demand rate (d-1)/T_round, pairs/s:")
+    print("\naggregate demand rate d/T_round, pairs/s:")
     for d in ds:
         row = [demand_rate_per_s(d, k) for k in range(3)]
         print(f"  d={d:2d}: {row[0]:8.1f} {row[1]:8.1f} {row[2]:8.1f}")

@@ -67,21 +67,22 @@ if __name__ == "__main__":
     assert abs(required_eta_int(d, 1, 1.0)[1] - 7.2e-5) / 7.2e-5 < 0.02
 
     print(f"\ndelivery probability at exactly pN=1: {1 - math.exp(-1):.3f}")
-    print(f"expected empty windows per merge, d(d-1)(1-P): "
-          f"{d*(d-1)*0.01:.2f} at P=0.99, {d*(d-1)*math.exp(-1):.1f} at pN=1")
+    print(f"expected empty windows per merge, d*d(1-P): "
+          f"{d*d*0.01:.2f} at P=0.99, {d*d*math.exp(-1):.1f} at pN=1")
 
     # ---- 5.4: which delivery form binds -------------------------------
-    # A round fires when all d-1 active lanes hold a pair. Lanes that
-    # delivered keep theirs, so the round waits E[W] windows, the mean of
-    # the maximum of d-1 geometric variables with per-window success P.
+    # A round fires when all d active lanes hold a pair (the seam has d checks:
+    # d-1 weight-4 + 1 weight-2, one Bell pair each). Lanes that delivered keep
+    # theirs, so the round waits E[W] windows, the mean of the maximum of d
+    # geometric variables with per-window success P.
     def expected_windows(P, lanes):
         return sum(1.0 - (1.0 - (1.0 - P) ** k) ** lanes for k in range(200))
     for P, tag in ((1 - math.exp(-1), "mean form"), (0.99, "99% form")):
-        w = expected_windows(P, d - 1)
+        w = expected_windows(P, d)
         print(f"  {tag:9s} P={P:.3f}: E[windows per round] = {w:.2f} "
               f"-> merge stretch x{w:.2f}")
-    assert 2.8 < expected_windows(1 - math.exp(-1), 6) < 3.1
-    assert expected_windows(0.99, 6) < 1.07
+    assert 3.0 < expected_windows(1 - math.exp(-1), 7) < 3.2   # d=7: 7 active lanes
+    assert expected_windows(0.99, 7) < 1.08
 
     # ---- ch7 (discussion): the distilled operating point ---------------
     # One round of double selection consumes N_RAW_IN raw pairs and succeeds
