@@ -49,26 +49,26 @@ def build_stabilizers(d: int) -> list:
     """Build all d*d - 1 checks of the rotated surface code.
 
     Inside: one weight-4 check on each 2x2 block; X/Z swaps like a chess board.
-    Edges:  weight-2 checks that close the open blocks; top/bottom X, sides Z.
+    Edges:  weight-2 checks that close the open blocks; top/bottom Z, sides X.
     """
     stabs = []
 
-    # Inside: a weight-4 check on each 2x2 block. (r+c) even -> X, odd -> Z.
+    # Inside: a weight-4 check on each 2x2 block. (r+c) even -> Z, odd -> X.
     for r in range(d - 1):
         for c in range(d - 1):
             block = frozenset({(r, c), (r, c + 1), (r + 1, c), (r + 1, c + 1)})
-            kind = "X" if (r + c) % 2 == 0 else "Z"
+            kind = "Z" if (r + c) % 2 == 0 else "X"   # Litinski frame: Z top/bottom (2026-07-15 flip)
             stabs.append(Stabilizer(kind, block))
 
     # Edges: weight-2 checks, one loop per side, on every other spot.
-    for c in range(1, d - 1, 2):                  # top    -> X
-        stabs.append(Stabilizer("X", frozenset({(0, c), (0, c + 1)})))
-    for c in range(0, d - 1, 2):                  # bottom -> X
-        stabs.append(Stabilizer("X", frozenset({(d - 1, c), (d - 1, c + 1)})))
-    for r in range(0, d - 1, 2):                  # left   -> Z
-        stabs.append(Stabilizer("Z", frozenset({(r, 0), (r + 1, 0)})))
-    for r in range(1, d - 1, 2):                  # right  -> Z
-        stabs.append(Stabilizer("Z", frozenset({(r, d - 1), (r + 1, d - 1)})))
+    for c in range(1, d - 1, 2):                  # top    -> Z
+        stabs.append(Stabilizer("Z", frozenset({(0, c), (0, c + 1)})))
+    for c in range(0, d - 1, 2):                  # bottom -> Z
+        stabs.append(Stabilizer("Z", frozenset({(d - 1, c), (d - 1, c + 1)})))
+    for r in range(0, d - 1, 2):                  # left   -> X
+        stabs.append(Stabilizer("X", frozenset({(r, 0), (r + 1, 0)})))
+    for r in range(1, d - 1, 2):                  # right  -> X
+        stabs.append(Stabilizer("X", frozenset({(r, d - 1), (r + 1, d - 1)})))
 
     return stabs
 
@@ -291,19 +291,19 @@ def seam_stabilizers(d: int) -> list:
     cross the remote link. The weight-2 check on row d-1 reads one qubit in each
     module, one gate crossing the link.
 
-    The seam type ALTERNATES with the checkerboard: weight-4 check s is X for even
-    s and Z for odd s, and the weight-2 boundary check is X. So the seam is MIXED,
-    (d+1)/2 X and (d-1)/2 Z -- never a single native type. The X-type seam checks
-    prepare and read their comm ancilla in the X basis, one rotation folded into
-    prep and one into read, exactly like the bulk X-checks (basis_rotations); the
-    Z-type ones are native. Each check crosses the link once, so a merge round
+    The seam type ALTERNATES with the checkerboard: weight-4 check s is Z for even
+    s and X for odd s, and the weight-2 boundary check is Z. So the seam is MIXED,
+    (d+1)/2 Z and (d-1)/2 X -- never a single native type. The minority X-type seam
+    checks prepare and read their comm ancilla in the X basis, one rotation folded
+    into prep and one into read, exactly like the bulk X-checks (basis_rotations);
+    the majority Z-type ones, the checks that carry the measured parity, are native. Each check crosses the link once, so a merge round
     spends d Bell pairs, one per check (bell_pairs_per_round)."""
     seam = []
     for s in range(d - 1):                                  # d-1 interior weight-4 checks
-        seam.append({"s": s, "kind": "X" if s % 2 == 0 else "Z", "weight": 4,
+        seam.append({"s": s, "kind": "Z" if s % 2 == 0 else "X", "weight": 4,
                      "A": [(s, d - 1), (s + 1, d - 1)],     # two local, module A col d-1
                      "B": [(s, d - 1), (s + 1, d - 1)]})    # two remote, module B col d-1 (mirror)
-    seam.append({"s": d - 1, "kind": "X", "weight": 2,      # one boundary weight-2 check
+    seam.append({"s": d - 1, "kind": "Z", "weight": 2,      # one boundary weight-2 check
                  "A": [(d - 1, d - 1)],                     # one local
                  "B": [(d - 1, d - 1)]})                    # one remote
     return seam
@@ -587,7 +587,7 @@ def netnew_busiest(d: int) -> int:
 def right_boundary_stabs(d: int) -> list:
     """The seam-facing right-boundary checks, off during a merge."""
     return [s for s in build_stabilizers(d)
-            if s.weight == 2 and s.kind == "Z" and all(c == d - 1 for r, c in s.data)]
+            if s.weight == 2 and s.kind == "X" and all(c == d - 1 for r, c in s.data)]
 
 
 def blocked_lanes(d: int) -> list:
@@ -1128,32 +1128,32 @@ def motional_beats_per_round(d: int) -> int:
 
 
 def check_seam_basis(d: int) -> None:
-    """Check: the d merge seam checks are MIXED type -- (d+1)/2 X and (d-1)/2 Z,
+    """Check: the d merge seam checks are MIXED type -- (d+1)/2 Z and (d-1)/2 X,
     alternating with the checkerboard as it continues across the seam (fixed by
     geometry, not chosen; verified in check_seam_valid). This corrects the earlier
-    claim that the seam is a single native (Z) type. The X-type seam checks prepare
-    and read their comm ancilla in the X basis, one single-qubit rotation folded
-    into prep and one into read, exactly as the bulk X-checks do (basis_rotations,
-    check_basis); the Z-type ones are native. So a merge round adds 2*(d+1)/2 = d+1
-    single-qubit rotations on the comm lanes -- real operations, but folded into
-    prep and read and charging no extra time-step."""
+    claim that the seam is a single native type. The minority X-type seam checks
+    prepare and read their comm ancilla in the X basis, one single-qubit rotation
+    folded into prep and one into read, exactly as the bulk X-checks do
+    (basis_rotations, check_basis); the majority Z-type ones are native. So a merge
+    round adds 2*(d-1)/2 = d-1 single-qubit rotations on the comm lanes -- real
+    operations, but folded into prep and read and charging no extra time-step."""
     seam = seam_stabilizers(d)
     assert len(seam) == d, f"d={d}: {len(seam)} seam checks, want {d}"
     nX = sum(1 for sc in seam if sc["kind"] == "X")
     nZ = sum(1 for sc in seam if sc["kind"] == "Z")
-    assert nX == (d + 1) // 2 and nZ == (d - 1) // 2, \
-        f"d={d}: seam type split is {nX}X/{nZ}Z, want {(d+1)//2}X/{(d-1)//2}Z"
+    assert nZ == (d + 1) // 2 and nX == (d - 1) // 2, \
+        f"d={d}: seam type split is {nZ}Z/{nX}X, want {(d+1)//2}Z/{(d-1)//2}X"
     assert all(sc["kind"] in ("X", "Z") for sc in seam), f"d={d}: a seam check has no basis"
 
 
 # --- AUDIT #2: d=3 matches the hand-checked simulator ----------------------
 # The 8 checks from the hand-checked simulator (qubits 1..9).
 # Census checks the shape; this checks the content.
-D3_REFERENCE = {
-    ("X", frozenset({1, 2, 4, 5})), ("X", frozenset({5, 6, 8, 9})),
-    ("X", frozenset({2, 3})),       ("X", frozenset({7, 8})),
-    ("Z", frozenset({2, 3, 5, 6})), ("Z", frozenset({4, 5, 7, 8})),
-    ("Z", frozenset({1, 4})),       ("Z", frozenset({6, 9})),
+D3_REFERENCE = {                                       # Litinski names (2026-07-15)
+    ("Z", frozenset({1, 2, 4, 5})), ("Z", frozenset({5, 6, 8, 9})),
+    ("Z", frozenset({2, 3})),       ("Z", frozenset({7, 8})),
+    ("X", frozenset({2, 3, 5, 6})), ("X", frozenset({4, 5, 7, 8})),
+    ("X", frozenset({1, 4})),       ("X", frozenset({6, 9})),
 }
 
 

@@ -26,17 +26,17 @@ def build_rect(W, H):
         for c in range(-1, W):
             corners = [(r, c), (r, c + 1), (r + 1, c), (r + 1, c + 1)]
             data = frozenset(q for q in corners if 0 <= q[0] < H and 0 <= q[1] < W)
-            kind = "X" if (r + c) % 2 == 0 else "Z"
+            kind = "Z" if (r + c) % 2 == 0 else "X"   # Litinski frame (2026-07-15)
             w = len(data)
             if w == 4:
                 stabs.append((kind, data))
             elif w == 2:
                 touches_top = (r == -1); touches_bot = (r + 1 == H)
                 touches_left = (c == -1); touches_right = (c + 1 == W)
-                if (touches_top or touches_bot):        # horizontal edge keeps X
-                    if kind == "X": stabs.append((kind, data))
-                elif (touches_left or touches_right):   # vertical edge keeps Z
+                if (touches_top or touches_bot):        # horizontal edge keeps Z (Litinski)
                     if kind == "Z": stabs.append((kind, data))
+                elif (touches_left or touches_right):   # vertical edge keeps X
+                    if kind == "X": stabs.append((kind, data))
             # w in (0,1) -> corner/outside, dropped
     return stabs
 

@@ -510,7 +510,12 @@ def build(d, merge, rounds, distill=False):
                  hi=[A(s) for s in op[1]], badge="syndromes")
         elif v == "measure":
             if distill:
-                snap("The survivors are read at the swap wells. This round's purified pairs reach module B.",
+                _rot = [l for l in op[1] if S.seam_stabilizers(d)[l]["kind"] == "X"]
+                _rtxt = (f" The X-type seam checks (lane{'s' if len(_rot) > 1 else ''} "
+                         f"{', '.join(map(str, _rot))}) read through their folded basis rotation."
+                         if _rot else "")
+                snap("The survivors are read at the swap wells. This round's purified pairs reach module B."
+                     + _rtxt,
                      hi=[C(l) for l in op[1]], badge="purified pairs to B", op="read",
                      pairs=[(C(l),) for l in op[1]])
                 for l in op[1]:
@@ -521,7 +526,12 @@ def build(d, merge, rounds, distill=False):
                     hop(old, free[0], l, f"{old} resets and rejoins the hold pool, an empty body again.")
                     NEED3[l] = old
             else:
-                snap("The carriers are read at their swap wells. This round's Bell pairs reach module B.",
+                _rot = [l for l in op[1] if S.seam_stabilizers(d)[l]["kind"] == "X"]
+                _rtxt = (f" The X-type seam checks (lane{'s' if len(_rot) > 1 else ''} "
+                         f"{', '.join(map(str, _rot))}) read through their folded basis rotation."
+                         if _rot else "")
+                snap("The carriers are read at their swap wells. This round's Bell pairs reach module B."
+                     + _rtxt,
                      hi=[C(l) for l in op[1]], badge="pairs to B", op="read",
                      pairs=[(C(l),) for l in op[1]])
         elif v == "from_spam":
